@@ -110,6 +110,7 @@ def gather_data(mode='all'):
     # connect to the mimic database
     con = psycopg2.connect(dbname='mimic')
 
+    # query mimic for ICU stays
     first_icu_query = '''
     select distinct i.subject_id, i.hadm_id,
     i.icustay_id, i.intime, i.outtime, i.admittime, i.dischtime
@@ -127,13 +128,11 @@ def gather_data(mode='all'):
     ''' % max_id
     first_icu = pd.read_sql_query(first_icu_query, con)
 
-    '''
+    # You can change the query, but you still gotta pass this constraint
     for i,row in first_icu.iterrows():
-        subj,hadm_id,stay_id,intime,outtime,admittime,dischtime = row
-        assert admittime <= intime <= outtime <= dischtime
-    '''
+        assert row.admittime <= row.intime <= row.outtime <= row.dischtime
 
-    # Query mimic for icu stays
+    # Query mimic for notes
     notes_query = \
     """
     select n.subject_id,n.hadm_id,n.charttime,n.category,n.text
@@ -209,6 +208,7 @@ def gather_data(mode='all'):
                 assert subject2hadm[subject_id] == hadm_id
             else:
                 subject2hadm[subject_id] = hadm_id
+
 
     def val(item):
         return item.values[0]

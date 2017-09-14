@@ -24,7 +24,7 @@ def main():
     mode = sys.argv[1]
 
     hours_s = sys.argv[2]
-    assert hours_s in ['12', '24', '240000'], hours_s
+    assert hours_s in ['12', '24', '240'], hours_s
     hours = float(hours_s)
 
     train_notes, train_outcomes = get_data('train', mode)
@@ -470,8 +470,8 @@ def extract_text_features(notes, hours):
                 else:
                     featname = ('unigram', w)
                 #features[featname] += tf
-                features[featname] += 1
-                #features[featname] = 1
+                #features[featname] += 1
+                features[featname] = 1
             #'''
 
             '''
