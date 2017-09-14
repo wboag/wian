@@ -110,59 +110,105 @@ def gather_data(mode='all'):
     # connect to the mimic database
     con = psycopg2.connect(dbname='mimic')
 
+    first_icu_query = '''
+    select distinct i.subject_id, i.hadm_id,
+    i.icustay_id, i.intime, i.outtime, i.admittime, i.dischtime
+      FROM mimiciii.icustay_detail i
+      LEFT JOIN mimiciii.icustays s ON i.icustay_id = s.icustay_id
+      WHERE s.first_careunit NOT like 'NICU'
+      and i.hospstay_seq = 1
+      and i.icustay_seq = 1
+      and i.age >= 15
+      and i.los_icu >= 0.5
+      and i.subject_id < %d
+      and i.admittime <= i.intime
+      and i.intime <= i.outtime
+      and i.outtime <= i.dischtime
+    ''' % max_id
+    first_icu = pd.read_sql_query(first_icu_query, con)
+
+    '''
+    for i,row in first_icu.iterrows():
+        subj,hadm_id,stay_id,intime,outtime,admittime,dischtime = row
+        assert admittime <= intime <= outtime <= dischtime
+    '''
+
     # Query mimic for icu stays
     notes_query = \
     """
-    with first_icustays as (
-        select distinct i.subject_id, i.hadm_id,
-        i.icustay_id, i.intime, i.outtime, i.admittime, i.dischtime
-          FROM mimiciii.icustay_detail i
-          LEFT JOIN mimiciii.icustays s ON i.icustay_id = s.icustay_id
-          WHERE s.first_careunit NOT like 'NICU'
-          and i.hospstay_seq = 1
-          and i.icustay_seq = 1
-          and i.age >= 15
-          and i.los_icu >= 0.5
-          and i.subject_id < %d
-    )
-    select n.subject_id,n.hadm_id,n.chartdate,n.charttime,n.category,n.text
+    select n.subject_id,n.hadm_id,n.charttime,n.category,n.text
     from mimiciii.noteevents n
-    inner join first_icustays f on f.hadm_id = n.hadm_id
     where iserror IS NULL --this is null in mimic 1.4, rather than empty space
-    and (n.chartdate >= f.admittime OR n.charttime >= f.admittime)
-    and (n.chartdate <= (f.dischtime - interval '1 day') OR
-         n.charttime <= (f.dischtime  - interval '1 day'))
-    and (n.subject_id<%d)
-      ;
-    """ % (max_id,max_id)
+    and subject_id < %d
+    and category != 'Discharge summary'
+    and hadm_id IS NOT NULL
+    and charttime IS NOT NULL
+    ;
+    """ % (max_id)
     notes = pd.read_sql_query(notes_query, con)
 
+    # consider all notes from patient's first hospital admission
+    first_hadm_notes = pd.merge(first_icu, notes, on=['subject_id', 'hadm_id'])
+
+    # filter down to only notes that happened during first ICU stay
+    first_icu_inds = []
+    for i,row in first_hadm_notes.iterrows():
+        if row.intime <= row.charttime <= row.outtime:
+            first_icu_inds.append(i)
+    first_icu_notes = first_hadm_notes.loc[first_icu_inds]
+
+    # only look at these three kinds of notes
+    categories = set(['Radiology','Nursing','Physician'])
+
+    # notes data
+    text_data = defaultdict(list)
+    for i,row in first_icu_notes.iterrows():
+        category = normalize_category(row.category)
+        if category in categories:
+            time = row.charttime - row.intime
+            #print row.subject_id, '\t', row.charttime, '\t', row.intime, '\t', time
+            assert time>=datetime.timedelta(days=0)
+            data = (time,category,row.text)
+            text_data[row.subject_id].append(data)
+
+
     # static demographic info
-    stay_details_query = 'select subject_id,hadm_id,icustay_id,gender,ethnicity,age,intime,hospital_expire_flag from mimiciii.icustay_detail where subject_id<%d and icustay_seq = 1;' % max_id
-    stay_details = pd.read_sql_query(stay_details_query, con)
+    demographics_query = 'select icustay_id,gender,ethnicity,age from mimiciii.icustay_detail where subject_id<%d;' % max_id
+    demographics = pd.read_sql_query(demographics_query, con)
+
+    # mortality outcome
+    mortality_query = 'select icustay_id,hospital_expire_flag from mimiciii.icustay_detail where subject_id<%d;' % max_id
+    mortality = pd.read_sql_query(mortality_query, con)
 
     # Get the SAPS scores
     saps_query = 'select icustay_id,sapsii from mimiciii.sapsii where subject_id<%d;' % max_id
     saps = pd.read_sql_query(saps_query, con)
 
     # icustay info
-    stay_query = 'select icustay_id,los,first_careunit,last_careunit,first_wardid,last_wardid from mimiciii.icustays where subject_id<%d' % max_id
+    stay_query = 'select hadm_id,icustay_id,los,first_careunit,last_careunit,first_wardid,last_wardid from mimiciii.icustays where subject_id<%d' % max_id
     stay = pd.read_sql_query(stay_query, con)
 
     # admissions info
     admissions_query = 'select hadm_id,admission_type,admission_location,discharge_location,insurance,language,marital_status,diagnosis from mimiciii.admissions where subject_id<%d;' % max_id
     admissions = pd.read_sql_query(admissions_query, con)
 
-    static = pd.merge(stay_details, saps, on=['icustay_id'])
-    static = pd.merge(static      , stay, on=['icustay_id'])
+    static = pd.merge(demographics, mortality , on=['icustay_id'])
+    static = pd.merge(static      , saps      , on=['icustay_id'])
+    static = pd.merge(static      , stay      , on=['icustay_id'])
+    static = pd.merge(static      , admissions, on=['hadm_id'])
 
     # note: iterating over notes => one hadm_id per subject_id
     subject2hadm = {}
-    for subject_id,hadm_id,chartdate,charttime,category,text in notes.values:
-        if subject_id in subject2hadm:
-            assert subject2hadm[subject_id] == hadm_id
-        else:
-            subject2hadm[subject_id] = hadm_id
+    for i,row in first_icu_notes.iterrows():
+        subject_id = row.subject_id
+        hadm_id = row.hadm_id
+
+        # have to check here in case filtering out some categories removes the only notes
+        if subject_id in text_data:
+            if subject_id in subject2hadm:
+                assert subject2hadm[subject_id] == hadm_id
+            else:
+                subject2hadm[subject_id] = hadm_id
 
     def val(item):
         return item.values[0]
@@ -172,9 +218,8 @@ def gather_data(mode='all'):
     for subject_id,hadm_id in subject2hadm.items():
         assert subject_id not in structured_data
         static_row = static.loc[static['hadm_id'] == hadm_id]
-        adm_row = admissions.loc[admissions['hadm_id'] == hadm_id]
         info = {
-                'subject_id':val(static_row['subject_id']),
+                'subject_id':subject_id,
                 'gender'   :val(static_row['gender'])   , 'age'   :val(static_row['age']),
                 'ethnicity':val(static_row['ethnicity']), 'sapsii':val(static_row['sapsii']),
                 'los'             :val(static_row['los'])      ,
@@ -183,30 +228,26 @@ def gather_data(mode='all'):
                 'first_wardid'    :val(static_row['first_wardid']),
                 'last_wardid'     :val(static_row['last_wardid']),
                 'hosp_expire_flag':val(static_row['hospital_expire_flag']),
-                'admission_type'    :val(adm_row['admission_type']),
-                'admission_location':val(adm_row['admission_location']),
-                'discharge_location':val(adm_row['discharge_location']),
-                'insurance'         :val(adm_row['insurance']),
-                'language'          :val(adm_row['language']),
-                'marital_status'    :val(adm_row['marital_status']),
-                'diagnosis'         :val(adm_row['diagnosis']),
+                'admission_type'    :val(static_row['admission_type']),
+                'admission_location':val(static_row['admission_location']),
+                'discharge_location':val(static_row['discharge_location']),
+                'insurance'         :val(static_row['insurance']),
+                'language'          :val(static_row['language']),
+                'marital_status'    :val(static_row['marital_status']),
+                'diagnosis'         :val(static_row['diagnosis']),
                }
         structured_data[subject_id] = info
 
-    # notes data
-    text_data = defaultdict(list)
-    for subject_id,hadm_id,chartdate,charttime,category,text in notes.values:
-        # notes data
-        intime = val(static_row['intime'])
-        #dt = charttime - intime
-        #time = (charttime, intime)
-        time = charttime
-        #assert dt>datetime.timedelta(days=0), '%s - %s -> %s' % (charttime,intime,dt)
-        data = (time,category,text)
-        text_data[subject_id].append(data)
 
     return text_data, structured_data
 
+
+
+def normalize_category(cat):
+    cat = cat.strip()
+    if 'Nursing' in cat:
+        cat = 'Nursing'
+    return cat
 
 
 
@@ -216,6 +257,7 @@ def timestamp(tup):
         return None
     else:
         return dt
+
 
 
 def dump_readable(X, Y):
