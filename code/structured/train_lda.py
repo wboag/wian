@@ -471,9 +471,10 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
 
     thisdir = os.path.dirname(os.path.abspath(__file__))
     taskdir = os.path.join(thisdir, 'output', task)
-    if os.path.exists(taskdir):
-        shutil.rmtree(taskdir)
-    os.mkdir(taskdir)
+    methoddir = os.path.join(taskdir, 'lda')
+    if os.path.exists(methoddir):
+        shutil.rmtree(methoddir)
+    os.mkdir(methoddir)
 
     # order predictions by confidence
     for pid,conf in sorted(confidence.items(), key=lambda t:t[1]):
@@ -482,7 +483,7 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
             success = ''
         else:
             success = '_'
-        filename = os.path.join(taskdir, '%s%s.pred' % (success,pid))
+        filename = os.path.join(methoddir, '%s%s.pred' % (success,pid))
         with open(filename, 'w') as f:
             print >>f, ''
             print >>f, '=' * 80

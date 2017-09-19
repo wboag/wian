@@ -38,7 +38,8 @@ def main():
     # Fit model for each prediction task
     models = {}
     tasks = dev_outcomes.values()[0].keys()
-    tasks = ['diagnosis']
+    tasks = ['hosp_expire_flag']
+    #tasks = ['diagnosis']
     #tasks = ['gender']
     excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'sapsii','los','age'])
     for task in tasks:
@@ -487,9 +488,10 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
 
     thisdir = os.path.dirname(os.path.abspath(__file__))
     taskdir = os.path.join(thisdir, 'output', task)
-    if os.path.exists(taskdir):
-        shutil.rmtree(taskdir)
-    os.mkdir(taskdir)
+    methoddir = os.path.join(taskdir, 'bow')
+    if os.path.exists(methoddir):
+        shutil.rmtree(methoddir)
+    os.mkdir(methoddir)
 
     def importance(featname, p):
         if featname in vect.vocabulary_:
@@ -505,7 +507,7 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
             success = ''
         else:
             success = '_'
-        filename = os.path.join(taskdir, '%s%s.pred' % (success,pid))
+        filename = os.path.join(methoddir, '%s%s.pred' % (success,pid))
         with open(filename, 'w') as f:
             print >>f, ''
             print >>f, '=' * 80
