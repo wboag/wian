@@ -297,7 +297,7 @@ def dump_readable(X, Y):
             print >>f, ''
 
             #for i,record in enumerate(sorted(X[pid], key=timestamp)):
-            for i,record in enumerate(sorted(X[pid], key=lambda t:t[1])):
+            for i,record in enumerate(sorted(X[pid])):
                 dt,category,note = record
                 print >>f, '='*120
                 print >>f, 'note:', i
