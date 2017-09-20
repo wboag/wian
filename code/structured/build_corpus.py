@@ -6,6 +6,7 @@ import cPickle as pickle
 from collections import defaultdict
 import datetime
 import re
+import random
 
 
 # organization: data/$pid.txt (order: demographics, outcome, notes)
@@ -27,7 +28,9 @@ def main():
     X, Y = gather_data(mode)
     assert sorted(X.keys()) == sorted(Y.keys())
 
+    # Randomly shuffle ids to create train/dev/test
     ids = X.keys()
+    random.shuffle(ids)
 
     # make train/dev/test
     train = set()
