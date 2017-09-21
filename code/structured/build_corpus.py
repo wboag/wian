@@ -267,7 +267,7 @@ def dump_readable(X, Y):
     for pid in X:
         filename = os.path.join(datadir, '%s.txt' % pid)
         with open(filename, 'w') as f:
-            if Y[pid]:
+            if Y[pid]['hosp_expire_flag']:
                 print >>f, 'died in hospital'
             else:
                 print >>f, 'survived!'
