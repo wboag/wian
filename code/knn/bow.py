@@ -45,10 +45,11 @@ def main():
     X2 = pca.fit_transform(X.todense())
 
     # for now, pickle it all so I can play with it locally
-    with open('bow.pickle', 'wb') as f:
-        pickle.dump(train_ids, f)
-        pickle.dump(X2, f)
-        pickle.dump(train_outcomes, f)
+    filename = '../../data/knn_%s_bow.pickle' % mode
+    print 'serializing:', filename
+    model = {'ids':train_ids, 'X':X, 'X2':X2, 'outcomes':train_outcomes}
+    with open(filename, 'wb') as f:
+        pickle.dump(model, f)
 
     '''
     # extract labels into list
