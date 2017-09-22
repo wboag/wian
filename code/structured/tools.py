@@ -106,7 +106,16 @@ def compute_stats_multiclass(task, pred, P, ref, labels_map, out_f):
     for p,r in zip(pred,ref):
         conf[p][r] += 1
 
-    labels = [ label for label,i in sorted(labels_map.items(), key=lambda t:t[1]) ]
+
+    if task in ['sapsii', 'age', 'los']:
+        labels = []
+        labels_ = [0] + labels_map
+        for i in range(len(labels_)-1):
+            label = '[%d,%s)' % (labels_[i],labels_[i+1])
+            labels.append(label)
+    else:
+        labels = [label for label,i in sorted(labels_map.items(), key=lambda t:t[1])]
+
 
     out_f.write(unicode(conf))
     out_f.write(unicode('\n'))

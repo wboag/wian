@@ -38,10 +38,11 @@ def main():
     # Fit model for each prediction task
     models = {}
     tasks = dev_outcomes.values()[0].keys()
-    tasks = ['hosp_expire_flag']
+    tasks = ['age','los','sapsii']
+    #tasks = ['hosp_expire_flag']
     #tasks = ['diagnosis']
     #tasks = ['gender']
-    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'sapsii','los','age'])
+    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit'])
     for task in tasks:
         if task in excluded:
             continue
@@ -87,7 +88,7 @@ def main():
 
         with io.StringIO() as out_f:
             # analysis
-            analyze(vect, clf, criteria, out_f)
+            analyze(task, vect, clf, criteria, out_f)
 
             # eval on dev data
             results(model, train_ids, train_X, train_Y, hours, 'TRAIN', task, out_f)
@@ -213,6 +214,38 @@ def filter_task(Y, task, per_task_criteria=None):
 
         # which patients have that diagnosis?
         ids = [pid for pid,y in Y.items() if (y[task] in diagnoses)]
+
+    elif task in ['sapsii','age','los']:
+        if per_task_criteria is None:
+            scores = sorted([ y[task] for y in Y.values() ])
+            # make quartiles
+            N = len(scores)
+            num_bins = 4
+            thresholds = []
+            for i in range(1,num_bins):
+                frac = float(i)/num_bins
+                threshold = scores[int(frac * N)]
+                thresholds.append(threshold)
+            thresholds.append(float('inf'))
+            '''
+            print thresholds
+            bins = defaultdict(list)
+            for s in scores:
+                for i in range(num_bins):
+                    if s < thresholds[i]:
+                        bins[i].append(s)
+                        break
+            for bin_id,sbin in bins.items():
+                print bin_id, len(sbin)
+            #exit()
+            '''
+
+            # save the "good" diagnoses (to extract same set from dev)
+            per_task_criteria = thresholds
+        else:
+            thresholds = per_task_criteria
+
+        ids = Y.keys()
 
     elif task == 'gender':
         if per_task_criteria is None:
@@ -396,20 +429,45 @@ def filter_task(Y, task, per_task_criteria=None):
         exit()
 
     # return filtered data
-    filtered_Y = {pid:y[task] for pid,y in Y.items() 
-                          if normalize_y(y[task],task) in per_task_criteria}
-    filtered_normed_Y = {pid:normalize_y(y, task) for pid,y in filtered_Y.items() 
-                          if normalize_y(y,task)!='**ignore**'}
-    Y = {pid:per_task_criteria[y] for pid,y in filtered_normed_Y.items()}
+    if task in ['sapsii', 'age', 'los']:
+        thresholds = per_task_criteria
+        scores = { pid:y[task] for pid,y in Y.items() }
+        Y = {}
+        for pid,s in scores.items():
+            for i,threshold in enumerate(thresholds):
+                if s < threshold:
+                    Y[pid] = i
+                    break
+        '''
+        counts = defaultdict(int)
+        for s in Y.values():
+            counts[s] += 1
+        print counts
+        '''
+
+    else:
+        filtered_Y = {pid:y[task] for pid,y in Y.items() 
+                              if normalize_y(y[task],task) in per_task_criteria}
+        filtered_normed_Y = {pid:normalize_y(y, task) for pid,y in filtered_Y.items() 
+                              if normalize_y(y,task)!='**ignore**'}
+        Y = {pid:per_task_criteria[y] for pid,y in filtered_normed_Y.items()}
     Y[-1] = len(per_task_criteria)
     return Y, per_task_criteria
 
 
 
-def analyze(vect, clf, labels_map, out_f):
+def analyze(task, vect, clf, labels_map, out_f):
 
     ind2feat =  { i:f for f,i in vect.vocabulary_.items() }
-    labels = [label for label,i in sorted(labels_map.items(), key=lambda t:t[1])]
+
+    if task in ['sapsii', 'age', 'los']:
+        labels = []
+        labels_ = [0] + labels_map
+        for i in range(len(labels_)-1):
+            label = '[%d,%s)' % (labels_[i],labels_[i+1])
+            labels.append(label)
+    else:
+        labels = [label for label,i in sorted(labels_map.items(), key=lambda t:t[1])]
 
     # most informative features
     #"""
@@ -471,7 +529,14 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
     criteria, vectorizers, clf = model
     vect = vectorizers[0]
 
-    V = {v:k for k,v in criteria.items()}
+    if task in ['sapsii', 'age', 'los']:
+        V = {}
+        labels_ = [0] + criteria
+        for i in range(len(labels_)-1):
+            label = '[%d,%s)' % (labels_[i],labels_[i+1])
+            V[i] = label
+    else:
+        V = {v:k for k,v in criteria.items()}
     V[len(V)] = '**wrong**'
 
     # for confidence
@@ -488,6 +553,8 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
 
     thisdir = os.path.dirname(os.path.abspath(__file__))
     taskdir = os.path.join(thisdir, 'output', task)
+    if not os.path.exists(taskdir):
+        os.mkdir(taskdir)
     methoddir = os.path.join(taskdir, 'bow')
     if os.path.exists(methoddir):
         shutil.rmtree(methoddir)
