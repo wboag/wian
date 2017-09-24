@@ -30,7 +30,7 @@ from keras.layers.pooling import GlobalAveragePooling1D
 
 from FableLite import W
 
-from tools import compute_stats_multiclass
+from tools import compute_stats_multiclass, compute_stats_binary
 
 
 
@@ -82,7 +82,7 @@ def main():
 
         # fit model
         X_doc,X_dts = X
-        lstm_model.fit([X_doc,X_dts], Y, epochs=20, verbose=1)
+        lstm_model.fit([X_doc,X_dts], Y, epochs=5, verbose=1)
 
         model = (criteria, vectorizers, lstm_model)
         models[task] = model
@@ -521,13 +521,16 @@ def results(model, ids, X, onehot_Y, hours, label, task, out_f):
     P = lstm_model.predict(list(X))
 
     train_pred = P.argmax(axis=1)
-    Y  = onehot_Y.argmax(axis=1)
-
-    assert all(map(int,P.argmax(axis=1)) == train_pred)
+    Y = onehot_Y.argmax(axis=1)
+    num_tags = len(set(Y))
 
     out_f.write('%s %s' % (unicode(label),task))
     out_f.write(unicode('\n'))
-    compute_stats_multiclass(task, train_pred, P, Y, criteria, out_f)
+    if num_tags == 2:
+        scores = P[:,1] - P[:,0]
+        compute_stats_binary(task, train_pred, scores, Y, criteria, out_f)
+    else:
+        compute_stats_multiclass(task, train_pred, P, Y, criteria, out_f)
     out_f.write(unicode('\n\n'))
 
 
@@ -694,7 +697,7 @@ def extract_text_features(notes, hours):
                 if w in W:
                     w2v_sum += v * W[w]
                     N += v
-            w2v_centroid = w2v_sum / N
+            w2v_centroid = w2v_sum / (N+1e-9)
 
             features.append( (dt,w2v_centroid) )
     return features

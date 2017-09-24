@@ -1,27 +1,15 @@
 
-import os, sys
-import re
-import cPickle as pickle
-import io
-from collections import defaultdict
 import numpy as np
-from sklearn.feature_extraction import DictVectorizer
 
 
-def compute_stats_binary(pred, P, ref, labels, out_f):
+
+def compute_stats_binary(task, pred, P, ref, labels, out_f):
     # santiy check
     assert all(map(int,P>0) == pred)
 
-    '''
-    import random
-    random.seed(5)
-    P = [ 2*random.random()-1 for _ in range(len(pred)) ]
-    pred = [ int(p>0) for p in P ]
-    #pred = [ 0 for _ in range(len(pred)) ]
-    '''
-
     V = set(pred) | set(ref)
     n = len(V)
+    assert n==2, 'sorry, must be exactly two labels (how else would we do AUC?)'
     conf = np.zeros((n,n), dtype='int32')
     for p,r in zip(pred,ref):
         conf[p][r] += 1
@@ -60,9 +48,21 @@ def compute_stats_binary(pred, P, ref, labels, out_f):
     out_f.write(unicode('\tspecificity %.3f\n' % specificity))
     out_f.write(unicode('\tsensitivty: %.3f\n' % sensitivity))
 
+    success = 0.
+    pos_examples = [p for p,y in zip(P, ref) if y==1]
+    neg_examples = [p for p,y in zip(P, ref) if y==0]
+    trials  = len(pos_examples) * len(neg_examples) + 1e-9
+    for pos in pos_examples:
+        for neg in neg_examples:
+            if pos > neg:
+                success += 1
+    empirical_auc = success / trials
+    out_f.write(unicode('\t\temp auc:    %.3f\n' % empirical_auc))
+
     # AUC
     tprs,fprs = [], []
-    for threshold in np.linspace(min(P),max(P),101):
+    smidge = min(P)*.01
+    for threshold in np.linspace(min(P)-smidge,max(P)+smidge,1001):
         vals = np.array(map(int,P>threshold))
         tpr_ =  true_positive_rate(vals, ref)
         fpr_ = false_positive_rate(vals, ref)
@@ -72,6 +72,7 @@ def compute_stats_binary(pred, P, ref, labels, out_f):
 
     auc = 0.0
     for i in range(len(tprs)-1):
+        assert fprs[i] >= fprs[i+1]
         avg_y = .5 * (tprs[i] + tprs[i+1])
         dx = fprs[i] - fprs[i+1]
         #auc += dx * dy

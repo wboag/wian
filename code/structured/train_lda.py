@@ -18,7 +18,7 @@ import datetime
 import tempfile
 
 
-from tools import compute_stats_multiclass
+from tools import compute_stats_binary, compute_stats_multiclass
 
 
 
@@ -437,15 +437,22 @@ def results(model, ids, X, Y, hours, label, task, out_f):
     vect = vectorizers[0]
 
     # for AUC
-    P = clf.decision_function(X)
+    P = clf.decision_function(X)[:,:2]
+    train_pred = P.argmax(axis=1)
 
-    train_pred = clf.predict(X)
+    # what is the predicted vocab without the dummy label?
+    V = set(train_pred[:-1]) | set(Y[:-1])
 
-    assert all(map(int,P.argmax(axis=1)) == train_pred)
+    # what is the predicted vocab without the dummy label?
+    V = set(train_pred[1:]) | set(Y[1:])
 
     out_f.write('%s %s' % (unicode(label),task))
     out_f.write(unicode('\n'))
-    compute_stats_multiclass(task, train_pred, P, Y, criteria, out_f)
+    if len(V) == 2:
+        scores = P[1:,1] - P[1:,0]
+        compute_stats_binary(task, train_pred[1:], scores, Y[1:], criteria, out_f)
+    else:
+        compute_stats_multiclass(task,train_pred[1:],P[1:,:],Y[1:],criteria,out_f)
     out_f.write(unicode('\n\n'))
 
 
