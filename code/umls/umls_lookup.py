@@ -57,11 +57,11 @@ def str_lookup(string):
     if key in C:
         return C[key]
     try:
-        conn.execute( "SELECT sty FROM MRCON a, MRSTY b WHERE a.cui = b.cui AND str = ?; " , (string,) )
+        conn.execute( "SELECT distinct sty FROM MRCON a, MRSTY b WHERE a.cui = b.cui AND str = ?; " , (string,) )
         results = conn.fetchall()
     except sqlite3.ProgrammingError, e:
         results = []
-    #C[key] = results
+    C[key] = results
     return results
 
 
@@ -72,11 +72,11 @@ def cui_lookup(string):
         return C[key]
     try:
         # Get cuis
-        conn.execute( "SELECT cui FROM MRCON WHERE str = ?;" , (string,) )
+        conn.execute( "SELECT distinct cui FROM MRCON WHERE str = ?;" , (string,) )
         results = conn.fetchall()
     except sqlite3.ProgrammingError, e:
         results = []
-    #C[key] = results
+    C[key] = results
     return results
 
 
@@ -86,11 +86,11 @@ def abr_lookup(string):
     if key in C:
         return C[key]
     try:
-        conn.execute( "SELECT str FROM LRABR WHERE abr = ?;", (string,))
+        conn.execute( "SELECT distinct str FROM LRABR WHERE abr = ?;", (string,))
         results = conn.fetchall()
     except sqlite3.ProgrammingError, e:
         results = []
-    #C[key] = results
+    C[key] = results
     return results
 
 
@@ -101,11 +101,11 @@ def tui_lookup(string):
     if key in C:
         return C[key]
     try:
-        conn.execute( "SELECT tui FROM MRSTY WHERE cui = ?;", (string,))
+        conn.execute( "SELECT distinct tui FROM MRSTY WHERE cui = ?;", (string,))
         results = conn.fetchall()
     except sqlite3.ProgrammingError, e:
         results = []
-    #C[key] = results
+    C[key] = results
     return results
 
 
@@ -118,8 +118,8 @@ def strip_punct(stringArg):
 
 
 if __name__ == '__main__':
-    print "str_lookup('blood'):", str_lookup('blood')
-    print "cui_lookup('blood'):", cui_lookup('blood')
-    print "abr_lookup('blood'):", abr_lookup('p.o.')
-    print "tui_lookup('blood'):", tui_lookup('C0005767')
-
+    print "str_lookup('blood'):   ", str_lookup('blood')
+    print "cui_lookup('blood'):   ", cui_lookup('blood')
+    print "abr_lookup('p.o.'):    ", abr_lookup('p.o.')
+    print "tui_lookup('C0005767'):", tui_lookup('C0005767')
+    print "cui_lookup('male'):", cui_lookup('male')

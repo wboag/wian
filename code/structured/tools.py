@@ -1,5 +1,15 @@
 
 import numpy as np
+import sys
+import os
+from os.path import dirname
+
+
+code_dir = dirname(dirname(os.path.abspath(__file__)))
+umlscode_dir = os.path.join(code_dir, 'umls')
+if umlscode_dir not in sys.path:
+    sys.path.append(umlscode_dir)
+import umls_lookup
 
 
 

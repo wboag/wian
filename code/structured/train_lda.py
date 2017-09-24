@@ -19,6 +19,7 @@ import tempfile
 
 
 from tools import compute_stats_binary, compute_stats_multiclass
+from tools import umls_lookup
 
 
 
@@ -519,10 +520,16 @@ def softmax(scores):
 
 
 def make_bow(toks):
+    # collect all words
     bow = defaultdict(int)
     for w in toks:
         bow[w] += 1
-    return bow
+    # only return words that have CUIs
+    cui_bow = defaultdict(int)
+    for w,c in bow.items():
+        for cui in umls_lookup.cui_lookup(w):
+            cui_bow[cui] += c
+    return cui_bow
 
 
 
