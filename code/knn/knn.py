@@ -15,15 +15,17 @@ def main():
 
     mode = sys.argv[1]
     model = sys.argv[2]
+    N = int(sys.argv[3])
 
     # load the data
-    filename = '../../data/knn_%s_%s.pickle' % (mode,model)
+    filename = '../../models/knn/knn_%s_%s-%d.pickle' % (mode,model,N)
     print 'loading:', filename
     with open(filename, 'rb') as f:
         model = pickle.load(f)
     ids = model['ids']
     X = model['X']
     X2 = model['X2']
+
     outcomes = model['outcomes']
 
     try:
@@ -84,8 +86,11 @@ def cosine(unit, v):
     return dot(unit,v) / (dot(v,v) + 1e-9)**0.5
 
 def dot(u,v):
-    ans = u * v.T
-    return ans[0,0]
+    if type(u) == type(np.array([])):
+        ans = np.dot(u,v)
+    else:
+        ans = (u * v.T)[0,0]
+    return ans
 
 
 

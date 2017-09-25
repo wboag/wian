@@ -14,6 +14,8 @@ import pandas as pd
 import datetime
 from sklearn.decomposition import PCA
 
+from FableLite import W
+
 
 
 
@@ -22,10 +24,9 @@ def main():
     mode = sys.argv[1]
 
     hours_s = sys.argv[2]
+    N = int(sys.argv[3])
     assert hours_s in ['12', '24', '240'], hours_s
     hours = float(hours_s)
-
-    N = int(sys.argv[3])
 
     train_notes, train_outcomes = get_data('train', mode)
     dev_notes  ,   dev_outcomes = get_data('dev'  , mode)
@@ -41,10 +42,10 @@ def main():
 
     # PCA to decompose into base components
     pca = PCA(n_components=2)
-    X2 = pca.fit_transform(X.todense())
+    X2 = pca.fit_transform(X)
 
     # for now, pickle it all so I can play with it locally
-    filename = '../../models/knn/knn_%s_bow-%d.pickle' % (mode,N)
+    filename = '../../models/knn/knn_%s_embeddings-%d.pickle' % (mode,N)
     print 'serializing:', filename
     model = {'ids':train_ids, 'X':X, 'X2':X2, 'outcomes':train_outcomes}
     with open(filename, 'wb') as f:
@@ -68,14 +69,16 @@ def get_data(datatype, mode):
 
 
 
-
 def extract_features_from_notes(notes, hours, N, df=None):
     features_list = {}
 
     # dummy record (prevent SVM from collparsing to single-dimension pred)
-    features_list[-1] = {'foo':1}
+    emb_size = W['and'].shape[0]
 
-    # doc freq
+    # dummy record (prevent SVM from collparsing to single-dimension pred)
+    features_list[-1] = [(0,np.zeros(emb_size))]
+
+    # no-op
     if df is None:
         df = build_df(notes, hours)
 
@@ -87,17 +90,51 @@ def extract_features_from_notes(notes, hours, N, df=None):
     return features_list, df
 
 
+
 def vectorize_X(ids, text_features, vectorizers=None):
-    # learn vectorizer on training data
+
+    '''
+    ids = ids[:3]
+    text_features = {k:v for k,v in text_features.items() if k in ids}
+    '''
+
     if vectorizers is None:
-        vect = DictVectorizer()
-        vect.fit(text_features.values())
-        vectorizers = (vect,)
+        # need reasonable limit on number of timesteps
+        num_docs = max(map(len,text_features.values()))
+        if num_docs > 32:
+            num_docs = 32
 
-    filtered_features = [ text_features[pid] for pid in ids ]
+        vectorizers = (num_docs,)
 
-    vect = vectorizers[0]
-    X = vect.transform(filtered_features)
+    num_samples = len(ids)
+    emb_size = W['and'].shape[0]
+    num_docs = vectorizers[0]
+
+    doc_embeddings = defaultdict(list)
+    for i,pid in enumerate(ids):
+        for j,(dt,centroid) in enumerate(text_features[pid][:num_docs]):
+            doc_embeddings[pid].append(centroid)
+
+    # agrregate document centroids
+    X = np.zeros((len(ids),emb_size))
+    for i,pid in enumerate(ids):
+        vecs = doc_embeddings[pid]
+
+        # average
+        res = np.zeros((1,emb_size))
+        for vec in vecs:
+            res += vec
+        pid_vector = res / (len(vecs) + 1e-9)
+
+        '''
+        # average
+        res = np.zeros((1,emb_size))
+        for vec in vecs:
+            res += vec
+        pid_vector = res / (len(vecs) + 1e-9)
+        '''
+
+        X[i,:] = pid_vector
 
     return X, vectorizers
 
@@ -106,7 +143,8 @@ def vectorize_X(ids, text_features, vectorizers=None):
 def make_bow(toks):
     bow = defaultdict(int)
     for w in toks:
-        bow[w] += 1
+        if len(w) != 1 or w=='m' or w=='f':
+            bow[w] += 1
     return bow
 
 
@@ -168,7 +206,6 @@ def normalize_y(label, task):
     return label
 
 
-
 def build_df(notes, hours):
     df = {}
     for pid,records in notes.items():
@@ -191,10 +228,9 @@ def build_df(notes, hours):
 
 
 
-def extract_text_features(notes, hours, N, df):
-    features = defaultdict(int)
-    features['b'] = 1.0
 
+def extract_text_features(notes, hours, N, df):
+    features = []
     for note in notes:
         dt = note[0]
         #print dt
@@ -210,35 +246,21 @@ def extract_text_features(notes, hours, N, df):
             tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
             topN = sorted(tfidf.items(), key=lambda t:t[1])[:N]
 
-            #'''
-            # unigram features
-            #for w,tf in bow.items():
-            for w,tf in topN:
-                featname = w
-                """
-                if section:
-                    featname = (w, section) # ('unigram', w, section)
-                else:
-                    featname = w # ('unigram', w)
-                """
-                #features[featname] += tf
-                #features[featname] += 1
-                features[featname] = 1
-            #'''
+            # compute centroid now (i.e. keras cant fine-tune)
+            emb_size = W['and'].shape[0]
+            w2v_sum = np.zeros(emb_size)
+            N = 0
+            for w,v in topN:
+                if w in W:
+                    #print w
+                    w2v_sum +=  W[w]
+                    N += 1
+            w2v_centroid = w2v_sum / (N+1e-9)
+            #print
 
-            '''
-            # ngram features
-            for n in [1,2]:
-                for i in range(len(toks)-n+1):
-                    ngram = tuple(toks[i:i+n])
-                    if section:
-                        featname = ('%d-gram'%n, ngram, section)
-                    else:
-                        featname = ('%d-gram'%n, ngram)
-                    features[featname] = 1.0
-            '''
-
-    return dict(features)
+            features.append( (dt,w2v_centroid) )
+    #exit()
+    return features
 
 
 
