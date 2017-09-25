@@ -42,7 +42,7 @@ def main():
     models = {}
     tasks = dev_outcomes.values()[0].keys()
     #tasks = ['diagnosis']
-    tasks = ['gender']
+    #tasks = ['gender']
     excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'sapsii','los','age'])
     for task in tasks:
         if task in excluded:
@@ -483,7 +483,7 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
     taskdir = os.path.join(thisdir, 'output', task)
     methoddir = os.path.join(taskdir, 'doc2vec')
     if not os.path.exists(taskdir):
-        os.mkdirs(taskdir)
+        os.makedirs(taskdir)
     if os.path.exists(methoddir):
         shutil.rmtree(methoddir)
     os.mkdir(methoddir)
