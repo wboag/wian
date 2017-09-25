@@ -14,20 +14,6 @@ import pandas as pd
 import time
 import datetime
 
-
-from keras.utils.np_utils import to_categorical
-from keras.preprocessing import sequence
-from keras.models import Model
-from keras.layers import Input
-from keras.layers.merge import Concatenate
-from keras.layers import Dense, Embedding, LSTM, Dropout, Bidirectional
-from keras.layers.crf import ChainCRF
-from keras.layers.wrappers import TimeDistributed
-from keras.layers import Masking
-from keras.callbacks import EarlyStopping
-from keras.layers.pooling import GlobalAveragePooling1D
-
-
 from FableLite import W
 
 from tools import compute_stats_multiclass, compute_stats_binary
@@ -52,9 +38,9 @@ def main():
 
     # Fit model for each prediction task
     models = {}
-    #tasks = dev_outcomes.values()[0].keys()
+    tasks = dev_outcomes.values()[0].keys()
     #tasks = ['hosp_expire_flag']
-    tasks = ['diagnosis']
+    #tasks = ['diagnosis']
     #tasks = ['gender']
     excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit'])
     for task in tasks:
@@ -74,20 +60,16 @@ def main():
         X, vectorizers = vectorize_X(train_ids, train_text_features, vectorizers=None)
 
         Y = vectorize_Y(train_ids, train_Y)
-        num_tags = Y.shape[1]
 
-        # build model
-        lstm_model = create_lstm_model(vectorizers, num_tags, X, Y)
+        # learn SVM
+        clf = LinearSVC(C=1e1)
+        clf.fit(X, Y)
 
-        # fit model
-        X_doc,X_dts = X
-        lstm_model.fit([X_doc,X_dts], Y, epochs=5, verbose=1)
-
-        model = (criteria, vectorizers, lstm_model)
+        model = (criteria, vectorizers, clf)
         models[task] = model
 
     for task,model in models.items():
-        criteria, vectorizers, lstm_model = model
+        criteria, vectorizers, clf = model
         vect = vectorizers[0]
 
         # train data
@@ -106,8 +88,8 @@ def main():
             # analysis
 
             # eval on dev data
-            results(model, train_ids, train_X, train_Y, hours, 'TRAIN', task, out_f)
-            results(model,   dev_ids,   dev_X,   dev_Y, hours, 'DEV'  , task, out_f)
+            results(model,train_ids,train_X,train_Y,hours,'TRAIN',task,criteria,out_f)
+            results(model,  dev_ids,  dev_X,  dev_Y,hours,'DEV'  ,task,criteria,out_f)
 
             output = out_f.getvalue()
         print output
@@ -116,16 +98,10 @@ def main():
         error_analysis(model, dev_ids, dev_notes, dev_text_features, dev_X, dev_Y, hours, 'DEV', task)
 
         # serialize trained model
-        modelname = '../../models/structured/bow/%s_%s.model' % (mode,task)
-        M = {'criteria':criteria, 'vect':vectorizers, 'model':lstm_pickle(lstm_model), 'output':output}
+        modelname = '../../models/structured/embeddings/%s_%s.model' % (mode,task)
+        M = {'criteria':criteria, 'vect':vectorizers, 'clf':clf, 'output':output}
         with open(modelname, 'wb') as f:
             pickle.dump(M, f)
-
-
-
-def lstm_pickle(lstm):
-    print 'TODO: pickle by saving weights and reading'
-    exit()
 
 
 
@@ -133,10 +109,10 @@ def vectorize_Y(ids, y_dict):
     # extract labels into list
     labels = set(y_dict.values())
     num_tags = len(set(labels))
-    Y = np.zeros((len(ids),num_tags))
+    Y = np.zeros(len(ids), dtype='int32')
     for i,pid in enumerate(ids):
         ind = y_dict[pid]
-        Y[i,ind] = 1
+        Y[i] = ind
     return Y
 
 
@@ -158,7 +134,10 @@ def extract_features_from_notes(notes, hours, df=None):
     # dummy record (prevent SVM from collparsing to single-dimension pred)
     emb_size = W['and'].shape[0]
 
-    # doc freq
+    # dummy record (prevent SVM from collparsing to single-dimension pred)
+    features_list[-1] = [(0,np.zeros(emb_size))]
+
+    # no-op
     if df is None:
         df = build_df(notes, hours)
 
@@ -190,65 +169,47 @@ def vectorize_X(ids, text_features, vectorizers=None):
     emb_size = W['and'].shape[0]
     num_docs = vectorizers[0]
 
-    dts = np.zeros((num_samples,num_docs,1))
-    X = np.zeros((num_samples,num_docs,emb_size))
+    doc_embeddings = defaultdict(list)
     for i,pid in enumerate(ids):
         for j,(dt,centroid) in enumerate(text_features[pid][:num_docs]):
-            # right padding
-            dts[i,num_docs-j-1,0] = dt.seconds
-            X[i,num_docs-j-1,:] = centroid
+            doc_embeddings[pid].append(centroid)
 
-    return (X,dts), vectorizers
+    # agrregate document centroids
+    X = np.zeros((len(ids),emb_size))
+    for i,pid in enumerate(ids):
+        vecs = doc_embeddings[pid]
 
+        # average
+        res = np.zeros((1,emb_size))
+        for vec in vecs:
+            res += vec
+        pid_vector = res / (len(vecs) + 1e-9)
 
+        '''
+        # average
+        res = np.zeros((1,emb_size))
+        for vec in vecs:
+            res += vec
+        pid_vector = res / (len(vecs) + 1e-9)
+        '''
 
-def create_lstm_model(vectorizers, num_tags, X_dts, Y):
+        X[i,:] = pid_vector
 
-    X,dts = X_dts
-
-    num_docs = vectorizers[0]
-    emb_size = X.shape[2]
-
-    print X.shape
-    print Y.shape
-
-    # document w2v centroids
-    X_input  = Input(shape=(num_docs,emb_size) , dtype='float32', name='doc')
-    seq = Bidirectional(LSTM(128, return_sequences=True))(X_input)
-
-    # delta t of timestamps
-    dt_input = Input(shape=(num_docs,1), dtype='float32', name='dt')
-
-    # combine inputs
-    combined = Concatenate()([seq, dt_input])
-    combined_seq = Bidirectional(LSTM(128))(combined)
-
-    # Predict target
-    pred = Dense(num_tags, activation='softmax')(combined_seq)
-
-    # Putting it all together
-    model = Model(inputs=[X_input,dt_input], outputs=pred)
-    print
-    print 'compiling model'
-    start = time.clock()
-    model.compile(loss='categorical_crossentropy', optimizer='adam')
-    end = time.clock()
-    print 'finished compiling: ', (end-start)
-    print
-
-    return model
+    return X, vectorizers
 
 
 
 def filter_task(Y, task, per_task_criteria=None):
 
-# If it's a diagnosis, then only include diagnoses that occur >= 10 times
+    # If it's a diagnosis, then only include diagnoses that occur >= 10 times
     if task == 'diagnosis':
         if per_task_criteria is None:
             # count diagnosis frequency
             counts = defaultdict(int)
             for y in Y.values():
-                counts[y[task]] += 1
+                normed = normalize_y(y[task], task)
+                if normed == '**ignore**': continue
+                counts[normed] += 1
 
             '''
             for y,c in sorted(counts.items(), key=lambda t:t[1]):
@@ -258,11 +219,8 @@ def filter_task(Y, task, per_task_criteria=None):
 
             # only include diagnois that are frequent enough
             diagnoses = {}
-            top5 = sorted(counts.values())[-5:][0]
-            for y,count in counts.items():
-                #if count >= 350:
-                if count >= top5:
-                    diagnoses[y] = len(diagnoses)
+            for y,count in sorted(counts.items(), key=lambda t:t[1])[-5:]:
+                diagnoses[y] = len(diagnoses)
 
             # save the "good" diagnoses (to extract same set from dev)
             per_task_criteria = diagnoses
@@ -541,34 +499,37 @@ def filter_task(Y, task, per_task_criteria=None):
         filtered_normed_Y = {pid:normalize_y(y, task) for pid,y in filtered_Y.items() 
                               if normalize_y(y,task)!='**ignore**'}
         Y = {pid:per_task_criteria[y] for pid,y in filtered_normed_Y.items()}
+    Y[-1] = len(per_task_criteria)
     return Y, per_task_criteria
 
 
 
-
-def results(model, ids, X, onehot_Y, hours, label, task, out_f):
-    criteria, vectorizers, lstm_model = model
+def results(model, ids, X, Y, hours, label, task, labels, out_f):
+    criteria, vectorizers, clf = model
     vect = vectorizers[0]
 
     # for AUC
-    P = lstm_model.predict(list(X))
-
+    P = clf.decision_function(X)[:,:-1]
     train_pred = P.argmax(axis=1)
-    Y = onehot_Y.argmax(axis=1)
-    num_tags = len(set(Y))
+
+    # what is the predicted vocab without the dummy label?
+    if task in ['los','age','sapsii']:
+        V = list(set(Y[1:]))
+    else:
+        V = labels.keys()
 
     out_f.write('%s %s' % (unicode(label),task))
     out_f.write(unicode('\n'))
-    if num_tags == 2:
-        scores = P[:,1] - P[:,0]
-        compute_stats_binary(task, train_pred, scores, Y, criteria, out_f)
+    if len(V) == 2:
+        scores = P[1:,1] - P[1:,0]
+        compute_stats_binary(task, train_pred[1:], scores, Y[1:], criteria, out_f)
     else:
-        compute_stats_multiclass(task, train_pred, P, Y, criteria, out_f)
+        compute_stats_multiclass(task,train_pred[1:],P[1:,:],Y[1:],criteria,out_f)
     out_f.write(unicode('\n\n'))
 
 
 
-def error_analysis(model, ids, notes, text_features, X, onehot_Y, hours, label, task):
+def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
     criteria, vectorizers, clf = model
     vect = vectorizers[0]
 
@@ -583,9 +544,8 @@ def error_analysis(model, ids, notes, text_features, X, onehot_Y, hours, label, 
     V[len(V)] = '**wrong**'
 
     # for confidence
-    P = clf.predict(list(X))
+    P = clf.decision_function(X)
     pred = P.argmax(axis=1)
-    Y = onehot_Y.argmax(axis=1)
 
     # convert predictions to right vs wrong
     confidence = {}
@@ -681,6 +641,10 @@ def normalize_y(label, task):
         if 'UNABLE TO OBTAIN' in label: return '**ignore**'
         if 'PATIENT DECLINED TO ANSWER' in label: return '**ignore**'
         if 'OTHER' in label: return '**ignore**'
+    elif task == 'diagnosis':
+        if label is None: return None
+        if 'CORONARY ARTERY DISEASE' in label: return 'CORONARY ARTERY DISEASE'
+        return label
     elif task == 'language':
         if label == 'ENGL': return 'ENGL'
         if label == 'SPAN': return 'SPAN'
@@ -748,7 +712,7 @@ def extract_text_features(notes, hours, df):
 
             # select top-20 words by tfidf
             tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
-            N = 20
+            N = 50
             topN = sorted(tfidf.items(), key=lambda t:t[1])[:N]
 
             # compute centroid now (i.e. keras cant fine-tune)

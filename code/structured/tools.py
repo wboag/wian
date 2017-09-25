@@ -17,7 +17,7 @@ def compute_stats_binary(task, pred, P, ref, labels, out_f):
     # santiy check
     assert all(map(int,P>0) == pred)
 
-    V = set(pred) | set(ref)
+    V = [0,1]
     n = len(V)
     assert n==2, 'sorry, must be exactly two labels (how else would we do AUC?)'
     conf = np.zeros((n,n), dtype='int32')
@@ -111,7 +111,7 @@ def compute_stats_multiclass(task, pred, P, ref, labels_map, out_f):
     #pred = pred[1:]
     #ref  =  ref[1:]
 
-    V = set(pred) | set(ref)
+    V = set(range(P.shape[1]))
     n = max(V)+1
     conf = np.zeros((n,n), dtype='int32')
     for p,r in zip(pred,ref):
@@ -135,7 +135,7 @@ def compute_stats_multiclass(task, pred, P, ref, labels_map, out_f):
     recalls = []
     f1s = []
     out_f.write(unicode('\t prec  rec    f1   label\n'))
-    for i in range(n-1):
+    for i in range(n):
         label = labels[i]
 
         tp = conf[i,i]

@@ -19,7 +19,6 @@ from tools import umls_lookup
 
 
 
-
 def main():
 
     mode = sys.argv[1]
@@ -38,11 +37,14 @@ def main():
 
     # Fit model for each prediction task
     models = {}
-    tasks = dev_outcomes.values()[0].keys()
+    #tasks = dev_outcomes.values()[0].keys()
     #tasks = ['age','los','sapsii']
+    #tasks = ['sapsii']
     #tasks = ['hosp_expire_flag']
     #tasks = ['diagnosis']
-    tasks = ['gender']
+    #tasks = ['ethnicity']
+    #tasks = ['gender']
+    tasks = ['gender', 'diagnosis']
     excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit'])
     for task in tasks:
         if task in excluded:
@@ -65,7 +67,7 @@ def main():
         assert sorted(set(Y)) == range(max(Y)+1), 'need one of each example'
 
         # learn SVM
-        clf = LinearSVC(C=1e1)
+        clf = LinearSVC(C=1e-2)
         clf.fit(X, Y)
 
         model = (criteria, vectorizers, clf)
@@ -92,8 +94,8 @@ def main():
             analyze(task, vect, clf, criteria, out_f)
 
             # eval on dev data
-            results(model, train_ids, train_X, train_Y, hours, 'TRAIN', task, out_f)
-            results(model,   dev_ids,   dev_X,   dev_Y, hours, 'DEV'  , task, out_f)
+            results(model,train_ids,train_X,train_Y,hours,'TRAIN',task,criteria,out_f)
+            results(model,  dev_ids,  dev_X,  dev_Y,hours,'DEV'  ,task,criteria,out_f)
 
             output = out_f.getvalue()
         print output
@@ -126,45 +128,16 @@ def extract_features_from_notes(notes, hours, df=None):
     # dummy record (prevent SVM from collparsing to single-dimension pred)
     features_list[-1] = {'foo':1}
 
+    # doc freq
+    if df is None:
+        df = build_df(notes, hours)
+
     # compute features
     for pid,records in notes.items():
-        features = extract_text_features(records, hours)
+        features = extract_text_features(records, hours, df)
         features_list[pid] = features
 
-    # build doc freqs if we need them for training
-    if df is None:
-        df = defaultdict(int)
-        for feats in features_list.values():
-            for w in feats.keys():
-                df[w] += 1
-
-    '''
-    # re-scale note-derived features by document frequency
-    min_df = 3
-    tfidf_text_features = {}
-    for pid,feats in features_list.items():
-        val = {}
-        for f,v in feats.items():
-            if f in df:
-                if df[f] >= min_df:
-                    #val[f] = float(v) / df[f]
-                    #val[f] = float(v) / (math.log(df[f]) + 1)
-                    #val[f] = 1. / (math.log(df[f]) + 1)
-                    val[f] = float(v)
-        tfidf_text_features[pid] = val
-
-    # filter down to topN words
-    N = int(1e10)
-    filtered_text_features = {}
-    for pid,feats in tfidf_text_features.items():
-        ranked = sorted(feats.items(), key=lambda t:t[1])
-        topN = dict(ranked[-N:])
-        filtered_text_features[pid] = topN
-    '''
-    filtered_text_features = features_list
-
-
-    return filtered_text_features, df
+    return features_list, df
 
 
 
@@ -192,7 +165,9 @@ def filter_task(Y, task, per_task_criteria=None):
             # count diagnosis frequency
             counts = defaultdict(int)
             for y in Y.values():
-                counts[y[task]] += 1
+                normed = normalize_y(y[task], task)
+                if normed == '**ignore**': continue
+                counts[normed] += 1
 
             '''
             for y,c in sorted(counts.items(), key=lambda t:t[1]):
@@ -202,11 +177,8 @@ def filter_task(Y, task, per_task_criteria=None):
 
             # only include diagnois that are frequent enough
             diagnoses = {}
-            top5 = sorted(counts.values())[-5:][0]
-            for y,count in counts.items():
-                #if count >= 350:
-                if count >= top5:
-                    diagnoses[y] = len(diagnoses)
+            for y,count in sorted(counts.items(), key=lambda t:t[1])[-5:]:
+                diagnoses[y] = len(diagnoses)
 
             # save the "good" diagnoses (to extract same set from dev)
             per_task_criteria = diagnoses
@@ -219,6 +191,37 @@ def filter_task(Y, task, per_task_criteria=None):
     elif task in ['sapsii','age','los']:
         if per_task_criteria is None:
             scores = sorted([ y[task] for y in Y.values() ])
+            if task == 'age':
+                scores = [ (y if y<90 else 90) for y in scores ]
+
+                mu = np.mean(scores)
+                std = np.std(scores)
+                thresholds = []
+                thresholds.append(mu-1.0*std)
+                thresholds.append(mu+1.0*std)
+                thresholds.append(float('inf'))
+            elif task == 'los':
+                '''
+                scores = [ (y if y<90 else 90) for y in scores ]
+
+                mu = np.mean(scores)
+                std = np.std(scores)
+                '''
+                thresholds = []
+                thresholds.append(1.5)
+                thresholds.append(3.5)
+                thresholds.append(float('inf'))
+            elif task == 'sapsii':
+                scores = [ (y if y<90 else 90) for y in scores ]
+
+                mu = np.mean(scores)
+                std = np.std(scores)
+                thresholds = []
+                thresholds.append(mu-0.8*std)
+                thresholds.append(mu+0.8*std)
+                thresholds.append(float('inf'))
+
+            '''
             # make quartiles
             N = len(scores)
             num_bins = 4
@@ -229,16 +232,18 @@ def filter_task(Y, task, per_task_criteria=None):
                 thresholds.append(threshold)
             thresholds.append(float('inf'))
             '''
+
+            '''
             print thresholds
             bins = defaultdict(list)
             for s in scores:
-                for i in range(num_bins):
+                for i in range(len(thresholds)):
                     if s < thresholds[i]:
                         bins[i].append(s)
                         break
             for bin_id,sbin in bins.items():
                 print bin_id, len(sbin)
-            #exit()
+            exit()
             '''
 
             # save the "good" diagnoses (to extract same set from dev)
@@ -508,16 +513,16 @@ def analyze(task, vect, clf, labels_map, out_f):
 
 
 
-def results(model, ids, X, Y, hours, label, task, out_f):
+def results(model, ids, X, Y, hours, label, task, labels, out_f):
     criteria, vectorizers, clf = model
     vect = vectorizers[0]
 
     # for AUC
-    P = clf.decision_function(X)[:,:2]
+    P = clf.decision_function(X)[:,:-1]
     train_pred = P.argmax(axis=1)
 
     # what is the predicted vocab without the dummy label?
-    V = set(train_pred[1:]) | set(Y[1:])
+    V = labels.keys()
 
     out_f.write('%s %s' % (unicode(label),task))
     out_f.write(unicode('\n'))
@@ -625,10 +630,20 @@ def make_bow(toks):
     for w in toks:
         bow[w] += 1
     # only return words that have CUIs
-    cui_bow = defaultdict(int)
+    cui_bow = bow
+    '''
+    ##cui_bow = defaultdict(int)
+    cui_bow = {}
     for w,c in bow.items():
+        """
+        if umls_lookup.cui_lookup(w):
+            cui_bow[w] = 1
+        """
+        #"""
         for cui in umls_lookup.cui_lookup(w):
-            cui_bow[cui] += c
+            cui_bow[cui] = 1
+        #"""
+    '''
     return cui_bow
 
 
@@ -644,6 +659,8 @@ def tokenize(text):
 
 def normalize_y(label, task):
     if task == 'ethnicity':
+        if 'WHITE' in label: return 'WHITE'
+        return 'NONWHITE'
         if 'BLACK' in label: return 'BLACK'
         if 'ASIAN' in label: return 'ASIAN'
         if 'WHITE' in label: return 'WHITE'
@@ -676,6 +693,10 @@ def normalize_y(label, task):
         if label == 'DIVORCED': return 'DIVORCED'
         return '**ignore**'
     elif task == 'admission_location':
+        if label is None: return None
+        if 'CORONARY ARTERY DISEASE' in label: return 'CORONARY ARTERY DISEASE'
+        return label
+    elif task == 'admission_location':
         if label == 'EMERGENCY ROOM ADMIT': return 'EMERGENCY ROOM ADMIT'
         if label == 'PHYS REFERRAL/NORMAL DELI': return 'PHYS REFERRAL/NORMAL DELI'
         if label == 'TRANSFER FROM HOSP/EXTRAM': return 'TRANSFER FROM HOSP/EXTRAM'
@@ -691,7 +712,29 @@ def normalize_y(label, task):
 
 
 
-def extract_text_features(notes, hours):
+def build_df(notes, hours):
+    df = {}
+    for pid,records in notes.items():
+        pid_bow = {}
+        for note in records:
+            dt = note[0]
+            #print dt
+            if isinstance(dt, pd._libs.tslib.NaTType): continue
+            if note[0] < datetime.timedelta(days=hours/24.0):
+                # access the note's info
+                section = note[1]
+                toks = tokenize(note[2])
+
+                bow = make_bow(toks)
+                for w in bow.keys():
+                    pid_bow[w] = 1
+        for w in pid_bow.keys():
+            df[w] = 1
+    return df
+
+
+
+def extract_text_features(notes, hours, df):
     features = defaultdict(int)
     features['b'] = 1.0
 
@@ -706,16 +749,22 @@ def extract_text_features(notes, hours):
 
             bow = make_bow(toks)
 
+            # select top-20 words by tfidf
+            tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
+            N = 10
+            topN = sorted(tfidf.items(), key=lambda t:t[1])[:N]
+
             #'''
             # unigram features
-            for w,tf in bow.items():
+            #for w,tf in bow.items():
+            for w,tf in topN:
                 featname = w
-                '''
+                """
                 if section:
                     featname = (w, section) # ('unigram', w, section)
                 else:
                     featname = w # ('unigram', w)
-                '''
+                """
                 #features[featname] += tf
                 #features[featname] += 1
                 features[featname] = 1
