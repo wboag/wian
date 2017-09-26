@@ -15,7 +15,7 @@ import datetime
 
 
 from tools import compute_stats_binary, compute_stats_multiclass
-from tools import umls_lookup
+from tools import get_data, build_df, extract_text_features, filter_task
 
 
 
@@ -24,27 +24,29 @@ def main():
     mode = sys.argv[1]
 
     hours_s = sys.argv[2]
-    assert hours_s in ['12', '24', '240'], hours_s
+    assert hours_s in ['12', '24', '2400'], hours_s
     hours = float(hours_s)
+
+    N = int(sys.argv[3])
 
     train_notes, train_outcomes = get_data('train', mode)
     dev_notes  ,   dev_outcomes = get_data('dev'  , mode)
 
     # vectorize notes
-    train_text_features, df  = extract_features_from_notes(train_notes, hours, df=None)
-    dev_text_features  , df_ = extract_features_from_notes(  dev_notes, hours, df=df)
+    train_text_features, df  = extract_features_from_notes(train_notes, hours, N,df=None)
+    dev_text_features  , df_ = extract_features_from_notes(  dev_notes, hours, N,df=df)
     assert df == df_
 
     # Fit model for each prediction task
     models = {}
-    #tasks = dev_outcomes.values()[0].keys()
+    tasks = dev_outcomes.values()[0].keys()
     #tasks = ['age','los','sapsii']
     #tasks = ['sapsii']
     #tasks = ['hosp_expire_flag']
     #tasks = ['diagnosis']
     #tasks = ['ethnicity']
     #tasks = ['gender']
-    tasks = ['gender', 'diagnosis']
+    #tasks = ['gender', 'diagnosis']
     excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit'])
     for task in tasks:
         if task in excluded:
@@ -91,7 +93,7 @@ def main():
 
         with io.StringIO() as out_f:
             # analysis
-            analyze(task, vect, clf, criteria, out_f)
+            #analyze(task, vect, clf, criteria, out_f)
 
             # eval on dev data
             results(model,train_ids,train_X,train_Y,hours,'TRAIN',task,criteria,out_f)
@@ -111,18 +113,7 @@ def main():
 
 
 
-def get_data(datatype, mode):
-    filename = '../../data/structured_%s_%s.pickle' % (mode,datatype)
-    with open(filename, 'rb') as f:
-        X = pickle.load(f)
-        outcomes = pickle.load(f)
-
-    assert sorted(X.keys()) == sorted(outcomes.keys())
-    return X, outcomes
-
-
-
-def extract_features_from_notes(notes, hours, df=None):
+def extract_features_from_notes(notes, hours, N, df=None):
     features_list = {}
 
     # dummy record (prevent SVM from collparsing to single-dimension pred)
@@ -134,7 +125,7 @@ def extract_features_from_notes(notes, hours, df=None):
 
     # compute features
     for pid,records in notes.items():
-        features = extract_text_features(records, hours, df)
+        features = extract_text_features(records, hours, N, df)
         features_list[pid] = features
 
     return features_list, df
@@ -154,311 +145,6 @@ def vectorize_X(ids, text_features, vectorizers=None):
     X = vect.transform(filtered_features)
 
     return X, vectorizers
-
-
-
-def filter_task(Y, task, per_task_criteria=None):
-
-    # If it's a diagnosis, then only include diagnoses that occur >= 10 times
-    if task == 'diagnosis':
-        if per_task_criteria is None:
-            # count diagnosis frequency
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            '''
-            for y,c in sorted(counts.items(), key=lambda t:t[1]):
-                print '%4d %s' % (c,y)
-            exit()
-            '''
-
-            # only include diagnois that are frequent enough
-            diagnoses = {}
-            for y,count in sorted(counts.items(), key=lambda t:t[1])[-5:]:
-                diagnoses[y] = len(diagnoses)
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = diagnoses
-        else:
-            diagnoses = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (y[task] in diagnoses)]
-
-    elif task in ['sapsii','age','los']:
-        if per_task_criteria is None:
-            scores = sorted([ y[task] for y in Y.values() ])
-            if task == 'age':
-                scores = [ (y if y<90 else 90) for y in scores ]
-
-                mu = np.mean(scores)
-                std = np.std(scores)
-                thresholds = []
-                thresholds.append(mu-1.0*std)
-                thresholds.append(mu+1.0*std)
-                thresholds.append(float('inf'))
-            elif task == 'los':
-                '''
-                scores = [ (y if y<90 else 90) for y in scores ]
-
-                mu = np.mean(scores)
-                std = np.std(scores)
-                '''
-                thresholds = []
-                thresholds.append(1.5)
-                thresholds.append(3.5)
-                thresholds.append(float('inf'))
-            elif task == 'sapsii':
-                scores = [ (y if y<90 else 90) for y in scores ]
-
-                mu = np.mean(scores)
-                std = np.std(scores)
-                thresholds = []
-                thresholds.append(mu-0.8*std)
-                thresholds.append(mu+0.8*std)
-                thresholds.append(float('inf'))
-
-            '''
-            # make quartiles
-            N = len(scores)
-            num_bins = 4
-            thresholds = []
-            for i in range(1,num_bins):
-                frac = float(i)/num_bins
-                threshold = scores[int(frac * N)]
-                thresholds.append(threshold)
-            thresholds.append(float('inf'))
-            '''
-
-            '''
-            print thresholds
-            bins = defaultdict(list)
-            for s in scores:
-                for i in range(len(thresholds)):
-                    if s < thresholds[i]:
-                        bins[i].append(s)
-                        break
-            for bin_id,sbin in bins.items():
-                print bin_id, len(sbin)
-            exit()
-            '''
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = thresholds
-        else:
-            thresholds = per_task_criteria
-
-        ids = Y.keys()
-
-    elif task == 'gender':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                counts[y[task]] += 1
-
-            # only include diagnois that are frequent enough
-            genders = {gender:i for i,gender in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = genders
-        else:
-            genders = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (y[task] in genders)]
-
-    elif task == 'insurance':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                counts[y[task]] += 1
-
-            # only include diagnois that are frequent enough
-            genders = {gender:i for i,gender in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = genders
-        else:
-            genders = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (y[task] in genders)]
-
-    elif task == 'ethnicity':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (normalize_y(y[task],task) in races)]
-
-    elif task == 'language':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (normalize_y(y[task],task) in races)]
-
-    elif task == 'marital_status':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (normalize_y(y[task],task) in races)]
-
-    elif task == 'admission_location':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (normalize_y(y[task],task) in races)]
-
-    elif task == 'discharge_location':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (normalize_y(y[task],task) in races)]
-
-    elif task == 'hosp_expire_flag':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = normalize_y(y[task], task)
-                if normed == '**ignore**': continue
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (normalize_y(y[task],task) in races)]
-
-    elif task == 'admission_type':
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in Y.values():
-                normed = y[task]
-                counts[normed] += 1
-
-            # only include diagnois that are frequent enough
-            races = {race:i for i,race in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = races
-        else:
-            races = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in Y.items() if (y[task] in races)]
-
-    else:
-        print task
-        counts = defaultdict(int)
-        for y in Y.values():
-            counts[y[task]] += 1
-        hist = defaultdict(int)
-        for y,count in counts.items():
-            hist[count] += 1
-
-        for y,count in sorted(counts.items(), key=lambda t:t[1]):
-            print '%5d %s' % (count,y)
-
-        print 'beep bop boop'
-        exit()
-
-    # return filtered data
-    if task in ['sapsii', 'age', 'los']:
-        thresholds = per_task_criteria
-        scores = { pid:y[task] for pid,y in Y.items() }
-        Y = {}
-        for pid,s in scores.items():
-            for i,threshold in enumerate(thresholds):
-                if s < threshold:
-                    Y[pid] = i
-                    break
-        '''
-        counts = defaultdict(int)
-        for s in Y.values():
-            counts[s] += 1
-        print counts
-        '''
-
-    else:
-        filtered_Y = {pid:y[task] for pid,y in Y.items() 
-                              if normalize_y(y[task],task) in per_task_criteria}
-        filtered_normed_Y = {pid:normalize_y(y, task) for pid,y in filtered_Y.items() 
-                              if normalize_y(y,task)!='**ignore**'}
-        Y = {pid:per_task_criteria[y] for pid,y in filtered_normed_Y.items()}
-    Y[-1] = len(per_task_criteria)
-    return Y, per_task_criteria
 
 
 
@@ -522,7 +208,10 @@ def results(model, ids, X, Y, hours, label, task, labels, out_f):
     train_pred = P.argmax(axis=1)
 
     # what is the predicted vocab without the dummy label?
-    V = labels.keys()
+    if task in ['los','age','sapsii']:
+        V = range(len(labels))
+    else:
+        V = labels.keys()
 
     out_f.write('%s %s' % (unicode(label),task))
     out_f.write(unicode('\n'))
@@ -621,168 +310,6 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
 def softmax(scores):
     e = np.exp(scores)
     return e / e.sum()
-
-
-
-def make_bow(toks):
-    # collect all words
-    bow = defaultdict(int)
-    for w in toks:
-        bow[w] += 1
-    # only return words that have CUIs
-    cui_bow = bow
-    '''
-    ##cui_bow = defaultdict(int)
-    cui_bow = {}
-    for w,c in bow.items():
-        """
-        if umls_lookup.cui_lookup(w):
-            cui_bow[w] = 1
-        """
-        #"""
-        for cui in umls_lookup.cui_lookup(w):
-            cui_bow[cui] = 1
-        #"""
-    '''
-    return cui_bow
-
-
-
-def tokenize(text):
-    text = text.lower()
-    text = re.sub('[\',\.\-/\n]', ' ', text)
-    text = re.sub('[^a-zA-Z0-9 ]', '', text)
-    text = re.sub('\d[\d ]+', ' 0 ', text)
-    return text.split()
-
-
-
-def normalize_y(label, task):
-    if task == 'ethnicity':
-        if 'WHITE' in label: return 'WHITE'
-        return 'NONWHITE'
-        if 'BLACK' in label: return 'BLACK'
-        if 'ASIAN' in label: return 'ASIAN'
-        if 'WHITE' in label: return 'WHITE'
-        if 'LATINO' in label: return 'HISPANIC'
-        if 'HISPANIC' in label: return 'HISPANIC'
-        if 'SOUTH AMERICAN' in label: return 'HISPANIC'
-        if 'PACIFIC' in label: return 'ASIAN'
-        if 'PORTUGUESE' in label: return 'WHITE'
-        if 'CARIBBEAN' in label: return 'HISPANIC'
-        if 'AMERICAN INDIAN' in label: return '**ignore**'
-        if 'ALASKA NATIVE' in label: return '**ignore**'
-        if 'MIDDLE EASTERN' in label: return '**ignore**'
-        if 'MULTI RACE' in label: return '**ignore**'
-        if 'UNKNOWN' in label: return '**ignore**'
-        if 'UNABLE TO OBTAIN' in label: return '**ignore**'
-        if 'PATIENT DECLINED TO ANSWER' in label: return '**ignore**'
-        if 'OTHER' in label: return '**ignore**'
-    elif task == 'language':
-        if label == 'ENGL': return 'ENGL'
-        if label == 'SPAN': return 'SPAN'
-        if label == 'RUSS': return 'RUSS'
-        if label == 'PTUN': return 'PTUN'
-        if label == 'CANT': return 'CANT'
-        if label == 'PORT': return 'PORT'
-        return '**ignore**'
-    elif task == 'marital_status':
-        if label == 'MARRIED': return 'MARRIED'
-        if label == 'SINGLE': return 'SINGLE'
-        if label == 'WIDOWED': return 'WIDOWED'
-        if label == 'DIVORCED': return 'DIVORCED'
-        return '**ignore**'
-    elif task == 'admission_location':
-        if label is None: return None
-        if 'CORONARY ARTERY DISEASE' in label: return 'CORONARY ARTERY DISEASE'
-        return label
-    elif task == 'admission_location':
-        if label == 'EMERGENCY ROOM ADMIT': return 'EMERGENCY ROOM ADMIT'
-        if label == 'PHYS REFERRAL/NORMAL DELI': return 'PHYS REFERRAL/NORMAL DELI'
-        if label == 'TRANSFER FROM HOSP/EXTRAM': return 'TRANSFER FROM HOSP/EXTRAM'
-        if label == 'CLINIC REFERRAL/PREMATURE': return 'CLINIC REFERRAL/PREMATURE'
-        return '**ignore**'
-    elif task == 'discharge_location':
-        if 'HOME' in label: return 'HOME'
-        if label == 'SNF': return 'SNF'
-        if label == 'REHAB/DISTINCT PART HOSP': return 'REHAB/DISTINCT PART HOSP'
-        if label == 'DEAD/EXPIRED': return 'DEAD/EXPIRED'
-        return '**ignore**'
-    return label
-
-
-
-def build_df(notes, hours):
-    df = {}
-    for pid,records in notes.items():
-        pid_bow = {}
-        for note in records:
-            dt = note[0]
-            #print dt
-            if isinstance(dt, pd._libs.tslib.NaTType): continue
-            if note[0] < datetime.timedelta(days=hours/24.0):
-                # access the note's info
-                section = note[1]
-                toks = tokenize(note[2])
-
-                bow = make_bow(toks)
-                for w in bow.keys():
-                    pid_bow[w] = 1
-        for w in pid_bow.keys():
-            df[w] = 1
-    return df
-
-
-
-def extract_text_features(notes, hours, df):
-    features = defaultdict(int)
-    features['b'] = 1.0
-
-    for note in notes:
-        dt = note[0]
-        #print dt
-        if isinstance(dt, pd._libs.tslib.NaTType): continue
-        if note[0] < datetime.timedelta(days=hours/24.0):
-            # access the note's info
-            section = note[1]
-            toks = tokenize(note[2])
-
-            bow = make_bow(toks)
-
-            # select top-20 words by tfidf
-            tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
-            N = 10
-            topN = sorted(tfidf.items(), key=lambda t:t[1])[:N]
-
-            #'''
-            # unigram features
-            #for w,tf in bow.items():
-            for w,tf in topN:
-                featname = w
-                """
-                if section:
-                    featname = (w, section) # ('unigram', w, section)
-                else:
-                    featname = w # ('unigram', w)
-                """
-                #features[featname] += tf
-                #features[featname] += 1
-                features[featname] = 1
-            #'''
-
-            '''
-            # ngram features
-            for n in [1,2]:
-                for i in range(len(toks)-n+1):
-                    ngram = tuple(toks[i:i+n])
-                    if section:
-                        featname = ('%d-gram'%n, ngram, section)
-                    else:
-                        featname = ('%d-gram'%n, ngram)
-                    features[featname] = 1.0
-            '''
-
-    return dict(features)
 
 
 
