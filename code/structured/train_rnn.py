@@ -59,7 +59,8 @@ def main():
     #tasks = ['hosp_expire_flag']
     #tasks = ['diagnosis']
     #tasks = ['gender']
-    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit'])
+    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance'])
+
     for task in tasks:
         if task in excluded:
             continue
@@ -84,7 +85,7 @@ def main():
 
         # fit model
         X_doc,X_dts = X
-        lstm_model.fit([X_doc,X_dts], Y, epochs=5, verbose=1)
+        lstm_model.fit([X_doc,X_dts], Y, epochs=10, verbose=1)
 
         model = (criteria, vectorizers, lstm_model)
         models[task] = model
@@ -210,17 +211,19 @@ def create_lstm_model(vectorizers, num_tags, X_dts, Y):
 
     # document w2v centroids
     X_input  = Input(shape=(num_docs,emb_size) , dtype='float32', name='doc')
-    seq = Bidirectional(LSTM(128, return_sequences=True))(X_input)
+    seq_in = Bidirectional(LSTM(128, return_sequences=True, dropout=0.5))(X_input)
+    seq    = Bidirectional(LSTM(128, return_sequences=True, dropout=0.5))(seq_in)
 
     # delta t of timestamps
     dt_input = Input(shape=(num_docs,1), dtype='float32', name='dt')
 
     # combine inputs
     combined = Concatenate()([seq, dt_input])
-    combined_seq = Bidirectional(LSTM(128))(combined)
+    combined_seq = Bidirectional(LSTM(128, dropout=0.5))(combined)
 
     # Predict target
-    pred = Dense(num_tags, activation='softmax')(combined_seq)
+    pred_in = Dense(64, activation='relu')(combined_seq)
+    pred    = Dense(num_tags, activation='softmax')(pred_in)
 
     # Putting it all together
     model = Model(inputs=[X_input,dt_input], outputs=pred)
