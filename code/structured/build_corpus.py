@@ -54,8 +54,8 @@ def main():
 
     categories = defaultdict(int)
     for pid,record in X.items():
-        category = record[0][1]
-        categories[category] += 1
+        for dt,category,text in record:
+            categories[category] += 1
 
     print
     for cat,count in sorted(categories.items(), key=lambda t:t[1]):
@@ -72,6 +72,8 @@ def main():
     train_Y = filter_data(Y, train)
     dev_Y   = filter_data(Y, dev)
     test_Y  = filter_data(Y, test)
+
+    assert len(train_X) + len(dev_X) + len(test_X) == len(ids)
 
     # you should only be manually examining the training data to build a model
     dump_readable(train_X, train_Y)
@@ -104,8 +106,10 @@ def gather_data(mode='all'):
     targets = {}
 
     if mode == 'small':
-        max_id = 100
+        min_id = 500
+        max_id = 1000
     elif mode == 'all':
+        min_id = 0
         max_id = 1e20
     else:
         raise Exception('bad mode "%s"' % mode)
@@ -124,11 +128,12 @@ def gather_data(mode='all'):
       and i.icustay_seq = 1
       and i.age >= 15
       and i.los_icu >= 0.5
+      and i.subject_id > %d
       and i.subject_id < %d
       and i.admittime <= i.intime
       and i.intime <= i.outtime
       and i.outtime <= i.dischtime
-    ''' % max_id
+    ''' % (min_id,max_id)
     first_icu = pd.read_sql_query(first_icu_query, con)
 
     # You can change the query, but you still gotta pass this constraint
@@ -141,12 +146,13 @@ def gather_data(mode='all'):
     select n.subject_id,n.hadm_id,n.charttime,n.category,n.text
     from mimiciii.noteevents n
     where iserror IS NULL --this is null in mimic 1.4, rather than empty space
+    and subject_id > %d
     and subject_id < %d
     and category != 'Discharge summary'
     and hadm_id IS NOT NULL
     and charttime IS NOT NULL
     ;
-    """ % (max_id)
+    """ % (min_id,max_id)
     notes = pd.read_sql_query(notes_query, con)
 
     # consider all notes from patient's first hospital admission
@@ -172,26 +178,27 @@ def gather_data(mode='all'):
             assert time>=datetime.timedelta(days=0)
             data = (time,category,row.text)
             text_data[row.subject_id].append(data)
+    text_data = dict(text_data)
 
 
     # static demographic info
-    demographics_query = 'select icustay_id,gender,ethnicity,age from mimiciii.icustay_detail where subject_id<%d;' % max_id
+    demographics_query = 'select icustay_id,gender,ethnicity,age from mimiciii.icustay_detail where subject_id>%d and subject_id<%d;' % (min_id,max_id)
     demographics = pd.read_sql_query(demographics_query, con)
 
     # mortality outcome
-    mortality_query = 'select icustay_id,hospital_expire_flag from mimiciii.icustay_detail where subject_id<%d;' % max_id
+    mortality_query = 'select icustay_id,hospital_expire_flag from mimiciii.icustay_detail where subject_id>%d and subject_id<%d;' % (min_id,max_id)
     mortality = pd.read_sql_query(mortality_query, con)
 
     # Get the SAPS scores
-    saps_query = 'select icustay_id,sapsii from mimiciii.sapsii where subject_id<%d;' % max_id
+    saps_query = 'select icustay_id,sapsii from mimiciii.sapsii where subject_id>%d and subject_id<%d;' % (min_id,max_id)
     saps = pd.read_sql_query(saps_query, con)
 
     # icustay info
-    stay_query = 'select hadm_id,icustay_id,los,first_careunit,last_careunit,first_wardid,last_wardid from mimiciii.icustays where subject_id<%d' % max_id
+    stay_query = 'select hadm_id,icustay_id,los,first_careunit,last_careunit,first_wardid,last_wardid from mimiciii.icustays where subject_id>%d and subject_id<%d' % (min_id,max_id)
     stay = pd.read_sql_query(stay_query, con)
 
     # admissions info
-    admissions_query = 'select hadm_id,admission_type,admission_location,discharge_location,insurance,language,marital_status,diagnosis from mimiciii.admissions where subject_id<%d;' % max_id
+    admissions_query = 'select hadm_id,admission_type,admission_location,discharge_location,insurance,language,marital_status,diagnosis from mimiciii.admissions where subject_id>%d and subject_id<%d;' % (min_id,max_id)
     admissions = pd.read_sql_query(admissions_query, con)
 
     static = pd.merge(demographics, mortality , on=['icustay_id'])
