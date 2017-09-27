@@ -18,7 +18,7 @@ import tempfile
 import gensim.models
 Doc2Vec = gensim.models.doc2vec.Doc2Vec
 
-from tools import compute_stats_multiclass, get_data, compute_stats_binary, tokenize, filter_task
+from tools import compute_stats_multiclass, get_data, compute_stats_binary, filter_task
 
 
 
@@ -34,8 +34,6 @@ def main():
     else:
         retrain = True
  
-    print(retrain)
-
     assert hours_s in ['12', '24', '2400'], hours_s
     hours = float(hours_s)
 
@@ -126,58 +124,22 @@ def main():
             pickle.dump(M, f)
 
 
-def extract_features_from_notes(notes, hours, df=None):
-    features_list = {}
-
-    # dummy record (prevent SVM from collparsing to single-dimension pred)
-    features_list[-1] = {'foo':1}
-
-    # compute features
-    for pid,records in notes.items():
-        features = extract_text_features(records, hours)
-        features_list[pid] = features
-
-    # build doc freqs if we need them for training
-    if df is None:
-        df = defaultdict(int)
-        for feats in features_list.values():
-            for w in feats.keys():
-                df[w] += 1
-
-    return features_list, df
-
-
 def preprocess_notes(notes, hours, tokens_only=False):
     preprocessed_notes = {}
     
     # dummy record (prevent SVM from collparsing to single-dimension pred)
-    preprocessed_notes[-1] = gensim.models.doc2vec.TaggedDocument(['foo'], [0])
+    preprocessed_notes[-1] = [gensim.models.doc2vec.TaggedDocument(['foo'], [0])]
     
     # get concatted notes
     for pid,records in notes.items():
-        concat_note = extract_concat_note(records, hours)
+        notes_list = extract_notes_list(records, hours)
         if tokens_only:
-            preprocessed_notes[pid] = concat_note  
+            preprocessed_notes[pid] = notes_list
         else:
-	    tagged_doc = gensim.models.doc2vec.TaggedDocument(concat_note, [pid])
-            preprocessed_notes[pid] = tagged_doc
+            TaggedDocument = gensim.models.doc2vec.TaggedDocument
+            preprocessed_notes[pid] = [TaggedDocument(notes_list[i], [pid, i]) for i in range(len(notes_list))]
 
     return preprocessed_notes
-
-
-def vectorize_X(ids, text_features, vectorizers=None):
-    # learn vectorizer on training data
-    if vectorizers is None:
-        vect = DictVectorizer()
-        vect.fit(text_features.values())
-        vectorizers = (vect,)
-
-    filtered_features = [ text_features[pid] for pid in ids ]
-
-    vect = vectorizers[0]
-    X = vect.transform(filtered_features)
-
-    return X, vectorizers
 
 
 def analyze(clf, labels_map, out_f):
@@ -317,20 +279,43 @@ def extract_concat_note(notes, hours):
         if dt < datetime.timedelta(days=hours/24.0):
             # access the note's info
             category = note[1]
-            tokens = tokenize(note[2])
+            tokens = note[2]
             concat_note += tokens
     return concat_note
 
+def extract_notes_list(notes, hours):
+    notes_list = []
+    for note in notes:
+        dt = note[0]
+        if isinstance(dt, pd._libs.tslib.NaTType): continue
+        if dt < datetime.timedelta(days=hours/24.0):
+            # access the note's info
+            category = note[1]
+            tokens = note[2]
+            notes_list.append(tokens)
+    return notes_list
+ 
 
 def doc2vec_features_fit(X):
+    docs = []
+    for patient in X:
+        docs += patient
     model = Doc2Vec(size=50, min_count=2, iter=100)
-    model.build_vocab(X)
-    model.train(X, total_examples=model.corpus_count, epochs=model.iter)
+    model.build_vocab(docs)
+    model.train(docs, total_examples=model.corpus_count, epochs=model.iter)
     return model
 
 def doc2vec_features_transform(model, X):
-    X_words = [tagged_doc.words for tagged_doc in X]
-    return [model.infer_vector(doc) for doc in X_words]
+    features = []
+    for patient in X:
+        notes_features = np.array([model.infer_vector(tagged_doc.words) for tagged_doc in patient])
+        feat_mean = np.mean(notes_features, axis=0)
+        feat_min = np.min(notes_features, axis=0)
+        feat_max = np.max(notes_features, axis=0)
+        patient_features = np.concatenate([feat_min, feat_max, feat_mean])
+        features.append(patient_features)
+
+    return features
     
 
 def load_file(filename):
