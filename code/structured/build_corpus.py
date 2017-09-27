@@ -75,8 +75,23 @@ def main():
 
     assert len(train_X) + len(dev_X) + len(test_X) == len(ids)
 
+    # how many notes does each patient have
+    cutoff = 32
+    lost = 0
+    N = 0
+    affected = 0
+    for pid,records in X.items():
+        n = len(records)
+        N += n
+        if n > cutoff:
+            res = n - cutoff
+            lost += res
+            affected += 1
+    print '%d patients' % affected
+    print '%d notes (%f)' % (lost,lost/float(N))
+
     # you should only be manually examining the training data to build a model
-    dump_readable(train_X, train_Y)
+    #dump_readable(train_X, train_Y)
 
     save_data('../../data/structured_%s_train.pickle'% mode, train_X, train_Y)
     save_data('../../data/structured_%s_dev.pickle'  % mode,   dev_X,   dev_Y)
@@ -176,7 +191,9 @@ def gather_data(mode='all'):
             time = row.charttime - row.intime
             #print row.subject_id, '\t', row.charttime, '\t', row.intime, '\t', time
             assert time>=datetime.timedelta(days=0)
-            data = (time,category,row.text)
+            text = tokenize(row.text)
+            #text = row.text
+            data = (time,category,text)
             text_data[row.subject_id].append(data)
     text_data = dict(text_data)
 
@@ -270,6 +287,66 @@ def timestamp(tup):
 
 
 
+regex_punctuation = re.compile('[\',\.\-/\n]')
+regex_alphanum    = re.compile('[^a-zA-Z0-9 ]')
+regex_num         = re.compile('\d[\d ]+')
+def tokenize(text):
+    text = text.strip()
+
+    # remove phi tags
+    tags = re.findall('\[\*\*.*?\*\*\]', text)
+    for tag in set(tags):
+        text = text.replace(tag, ' ')
+
+    # collapse phrases (including diagnoses) into single tokens
+    if text != text.upper():
+        caps_matches = set(re.findall('([A-Z][A-Z_ ]+[A-Z])', text))
+        for caps_match in caps_matches:
+            caps_match = re.sub(' +', ' ', caps_match)
+            if len(caps_match) < 35:
+                replacement = caps_match.replace(' ','_')
+                text = text.replace(caps_match,replacement)
+
+    year_regexes = ['(\d+) years? old', '\s(\d+) ?yo ', '(\d+)[ -]year-old',
+                    '\s(\d+) yr old', '\s(\d+) yo[m/f]', '(\d+) y/o ']
+    year_text = ' ' + text.lower()
+    for year_regex in year_regexes:
+        year_matches = re.findall(year_regex, year_text)
+        for match in set(year_matches):
+            binned_age = ' %s ' % bin_age(match)
+            text = text.replace(match, binned_age)
+
+    text = text.lower()
+    text = re.sub(regex_punctuation, ' ', text)
+    text = re.sub(regex_alphanum   , '', text)
+    text = re.sub(regex_num        , ' 0 ', text)
+    return text.split()
+
+
+def bin_age(age):
+    age = int(age)
+    if age < 20:
+        return 'AGE_LESS_THAN_TWENTY'
+    if age < 30:
+        return 'AGE_BETWEEN_TWENTY_AND_THIRTY'
+    if age < 40:
+        return 'AGE_BETWEEN_THIRTY_AND_FOURTY'
+    if age < 50:
+        return 'AGE_BETWEEN_FOURTY_AND_FIFTY'
+    if age < 60:
+        return 'AGE_BETWEEN_FIFTY_AND_SIXTY'
+    if age < 70:
+        return 'AGE_BETWEEN_SIXTY_AND_SEVENTY'
+    if age < 80:
+        return 'AGE_BETWEEN_SEVENTY_AND_EIGHTY'
+    if age < 90:
+        return 'AGE_BETWEEN_EIGHTY_AND_NINETY'
+    if age > 90:
+        return 'AGE_OVER_NINETY'
+    raise Exception('shouldnt get here')
+
+
+
 def dump_readable(X, Y):
     for pid in X:
         filename = os.path.join(datadir, '%s.txt' % pid)
@@ -311,7 +388,8 @@ def dump_readable(X, Y):
                 print >>f, dt
                 print >>f, category
                 print >>f, '-'*30
-                print >>f, note.strip()
+                #print >>f, note.strip()
+                print >>f, ' '.join(note).strip()
                 print >>f, '*'*120
                 print >>f, '\n'
 
