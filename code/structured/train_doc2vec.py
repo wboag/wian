@@ -17,6 +17,8 @@ import datetime
 import tempfile
 import gensim.models
 Doc2Vec = gensim.models.doc2vec.Doc2Vec
+import logging
+logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
 from tools import compute_stats_multiclass, get_data, compute_stats_binary, filter_task
 
@@ -40,15 +42,43 @@ def main():
     train_notes, train_outcomes = get_data('train', mode)
     dev_notes  ,   dev_outcomes = get_data('dev'  , mode)
 
+    print 'Preprocessing notes'
     # put notes in form needed for testing/training doc2vec model
     train_tagged_docs = preprocess_notes(train_notes, hours)
     dev_tagged_docs   = preprocess_notes(  dev_notes, hours)
+
+    doc2vec_name = '../../models/structured/doc2vec/doc2vec_%s.p' % mode
+    features_name = '../../models/structured/doc2vec/doc2vec_%s.features' % (mode)
+    if retrain or not os.path.isfile(doc2vec_name) or not os.path.isfile(features_name):
+        print 'Fitting doc2vec model'
+        # Combine notes into a single vector for training doc2vec
+        X = [train_tagged_docs[pid] for pid in train_tagged_docs.keys()]
+        X = X + [dev_tagged_docs[pid] for pid in dev_tagged_docs.keys()]
+        doc2vec = doc2vec_features_fit(X)
+        
+        print 'Transforming doc2vec model'
+        train_doc2vec_feats = doc2vec_features_transform(doc2vec, train_tagged_docs)
+        dev_doc2vec_feats = doc2vec_features_transform(doc2vec, dev_tagged_docs)
+        F = {'train': train_doc2vec_feats, 'dev': dev_doc2vec_feats}
+        
+        print 'Saving doc2vec'
+        with open(doc2vec_name, 'wb') as f:
+            pickle.dump(doc2vec, f)
+        with open(features_name, 'wb') as f:
+            pickle.dump(F, f)
+    else:
+        doc2vec = pickle.load(open(doc2vec_name, 'rb'))
+        F = pickle.load(open(features_name, 'rb'))
+        train_doc2vec_feats = F['train']
+        dev_doc2vec_feats = F['dev']
+    
 
     # Fit model for each prediction task
     models = {}
     tasks = dev_outcomes.values()[0].keys()
     #tasks = ['diagnosis']
     #tasks = ['gender']
+    tasks = ['diagnosis', 'los', 'age', 'gender', 'ethnicity', 'admission_type', 'hosp_expire_flag']
     excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance'])
     for task in tasks:
         if task in excluded:
@@ -58,7 +88,7 @@ def main():
             print 'Loading model for task %s mode %s'%(task,mode)
 	    # load serialized model model
             M = pickle.load(open(modelname, 'rb'))
-            models[task] = (M['criteria'], M['clf'], M['doc2vec'])
+            models[task] = (M['criteria'], M['clf'])
             continue
 
         # extract appropriate data
@@ -72,34 +102,29 @@ def main():
         assert sorted(set(Y)) == range(max(Y)+1), 'need one of each example'
         
         # extract features into list
-        X = [train_tagged_docs[pid] for pid in train_ids]
-
-        # Do doc2vec for feature dimension reduction
-        doc2vec = doc2vec_features_fit(X)
-        X_doc2vec = doc2vec_features_transform(doc2vec, X)
+        X_doc2vec = [train_doc2vec_feats[pid] for pid in train_ids]
 
         # learn SVM
+        print 'Learning SVM'
         clf = LinearSVC(C=1e1)
         clf.fit(X_doc2vec, Y)
 
-        model = (criteria, clf, doc2vec)
+        model = (criteria, clf)
         models[task] = model
 
     for task,model in models.items():
-        criteria, clf, doc2vec = model
+        criteria, clf = model
 
         # train data
         train_labels,_ = filter_task(train_outcomes, task, per_task_criteria=criteria)
         train_ids = sorted(train_labels.keys())
-        train_X = [train_tagged_docs[pid] for pid in train_ids]
-        train_X_doc2vec = doc2vec_features_transform(doc2vec, train_X)
+        train_X_doc2vec = [train_doc2vec_feats[pid] for pid in train_ids]
         train_Y = np.array([train_labels[pid] for pid in train_ids])
 
         # dev data
         dev_labels,_ = filter_task(dev_outcomes, task, per_task_criteria=criteria)
         dev_ids = sorted(dev_labels.keys())
-        dev_X = [dev_tagged_docs[pid] for pid in dev_ids]
-        dev_X_doc2vec = doc2vec_features_transform(doc2vec, dev_X)
+        dev_X_doc2vec = [dev_doc2vec_feats[pid] for pid in dev_ids]
         dev_Y = np.array([dev_labels[pid] for pid in dev_ids])
 
         with io.StringIO() as out_f:
@@ -122,22 +147,23 @@ def main():
              'output':output}
         with open(modelname, 'wb') as f:
             pickle.dump(M, f)
+        
 
 
 def preprocess_notes(notes, hours, tokens_only=False):
     preprocessed_notes = {}
     
     # dummy record (prevent SVM from collparsing to single-dimension pred)
-    preprocessed_notes[-1] = [gensim.models.doc2vec.TaggedDocument(['foo'], [0])]
+    preprocessed_notes[-1] = gensim.models.doc2vec.TaggedDocument(['foo'], [0])
     
     # get concatted notes
     for pid,records in notes.items():
-        notes_list = extract_notes_list(records, hours)
+        concat_note = extract_concat_note(records, hours)
         if tokens_only:
-            preprocessed_notes[pid] = notes_list
+            preprocessed_notes[pid] = concat_note
         else:
             TaggedDocument = gensim.models.doc2vec.TaggedDocument
-            preprocessed_notes[pid] = [TaggedDocument(notes_list[i], [pid, i]) for i in range(len(notes_list))]
+            preprocessed_notes[pid] = TaggedDocument(concat_note, [pid])
 
     return preprocessed_notes
 
@@ -186,7 +212,7 @@ def analyze(clf, labels_map, out_f):
 
 
 def results(model, ids, X, Y, hours, label, task, labels, out_f):
-    criteria, clf, doc2vec = model
+    criteria, clf = model
 
     # for AUC
     P = clf.decision_function(X)[:,:-1]
@@ -209,7 +235,7 @@ def results(model, ids, X, Y, hours, label, task, labels, out_f):
 
 
 def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
-    criteria, clf, doc2vec = model
+    criteria, clf = model
     if not isinstance(criteria, dict):
        return 
 
@@ -295,17 +321,22 @@ def extract_notes_list(notes, hours):
             notes_list.append(tokens)
     return notes_list
  
-
 def doc2vec_features_fit(X):
+    '''
     docs = []
     for patient in X:
         docs += patient
-    model = Doc2Vec(size=50, min_count=2, iter=100)
+    '''
+    docs = X
+    model = Doc2Vec(size=150, min_count=2, iter=100, workers=8)
+    print 'building model vocab'
     model.build_vocab(docs)
+    print 'training model'
     model.train(docs, total_examples=model.corpus_count, epochs=model.iter)
     return model
 
 def doc2vec_features_transform(model, X):
+    '''
     features = []
     for patient in X:
         notes_features = np.array([model.infer_vector(tagged_doc.words) for tagged_doc in patient])
@@ -314,7 +345,8 @@ def doc2vec_features_transform(model, X):
         feat_max = np.max(notes_features, axis=0)
         patient_features = np.concatenate([feat_min, feat_max, feat_mean])
         features.append(patient_features)
-
+    '''
+    features = {pid:model.infer_vector(X[pid].words) for pid in X.keys()}
     return features
     
 
