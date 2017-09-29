@@ -33,6 +33,14 @@ def get_data(datatype, mode):
 
 
 
+def get_treatments(mode):
+    filename = '../../data/%s_treatments.pickle' % (mode)
+    with open(filename, 'rb') as f:
+        T = pickle.load(f)
+    return T
+
+
+
 def compute_stats_binary(task, pred, P, ref, labels, out_f):
     # santiy check
     assert all(map(int,P>0) == pred)
@@ -144,7 +152,7 @@ def compute_stats_multiclass(task, pred, P, ref, labels_map, out_f):
         labels = []
         labels_ = [0] + labels_map
         for i in range(len(labels_)-1):
-            label = '[%d,%s)' % (labels_[i],labels_[i+1])
+            label = '[%s,%s)' % (labels_[i],labels_[i+1])
             labels.append(label)
     else:
         labels = [label for label,i in sorted(labels_map.items(), key=lambda t:t[1])]
@@ -230,18 +238,13 @@ def make_bow(toks):
 
 
 
-def tokenize(text):
-    text = text.lower()
-    text = re.sub('[\',\.\-/\n]', ' ', text)
-    text = re.sub('[^a-zA-Z0-9 ]', '', text)
-    text = re.sub('\d[\d ]+', ' 0 ', text)
-    return text.split()
-
-
-
 def normalize_y(label, task):
     if task == 'ethnicity':
         if 'WHITE' in label: return 'WHITE'
+        if 'MULTI RACE' in label: return '**ignore**'
+        if 'UNKNOWN' in label: return '**ignore**'
+        if 'UNABLE TO OBTAIN' in label: return '**ignore**'
+        if 'PATIENT DECLINED TO ANSWER' in label: return '**ignore**'
         return 'NONWHITE'
         if 'BLACK' in label: return 'BLACK'
         if 'ASIAN' in label: return 'ASIAN'
@@ -255,10 +258,6 @@ def normalize_y(label, task):
         if 'AMERICAN INDIAN' in label: return '**ignore**'
         if 'ALASKA NATIVE' in label: return '**ignore**'
         if 'MIDDLE EASTERN' in label: return '**ignore**'
-        if 'MULTI RACE' in label: return '**ignore**'
-        if 'UNKNOWN' in label: return '**ignore**'
-        if 'UNABLE TO OBTAIN' in label: return '**ignore**'
-        if 'PATIENT DECLINED TO ANSWER' in label: return '**ignore**'
         if 'OTHER' in label: return '**ignore**'
     elif task == 'language':
         if label == 'ENGL': return 'ENGL'
@@ -276,8 +275,17 @@ def normalize_y(label, task):
         return '**ignore**'
     elif task == 'diagnosis':
         if label is None: return None
-        if 'CORONARY ARTERY DISEASE' in label: return 'CORONARY ARTERY DISEASE'
-        return label
+        if 'INTRACRANIAL HEMORRHAGE' == label: return 'INTRACRANIAL HEMORRHAGE'
+        if 'GASTROINTESTINAL BLEED' == label: return 'GASTROINTESTINAL BLEED'
+        if 'SEPSIS' == label: return 'SEPSIS'
+        if 'PNEUMONIA' == label: return 'PNEUMONIA'
+        if 'CORONARY ARTERY DISEASE' == label: return 'CORONARY ARTERY DISEASE'
+        return '**ignore**'
+    elif task == 'admission_type':
+        if label == 'EMERGENCY': return 'URGENT'
+        if label == 'URGENT': return 'URGENT'
+        if label == 'ELECTIVE': return 'ELECTIVE'
+        return '**ignore**'
     elif task == 'admission_location':
         if label == 'CLINIC REFERRAL/PREMATURE': return 'CLINIC REFERRAL/PREMATURE'
         if label == 'EMERGENCY ROOM ADMIT': return 'EMERGENCY ROOM ADMIT'
@@ -305,7 +313,7 @@ def build_df(notes, hours):
             if note[0] < datetime.timedelta(days=hours/24.0):
                 # access the note's info
                 section = note[1]
-                toks = tokenize(note[2])
+                toks = note[2]
 
                 bow = make_bow(toks)
                 for w in bow.keys():
@@ -320,20 +328,21 @@ def extract_text_features(notes, hours, N, df):
     features = defaultdict(int)
     features['b'] = 1.0
 
-    for note in notes:
+    for note in notes[:24]:
         dt = note[0]
         #print dt
         if isinstance(dt, pd._libs.tslib.NaTType): continue
         if note[0] < datetime.timedelta(days=hours/24.0):
             # access the note's info
             section = note[1]
-            toks = tokenize(note[2])
+            toks = note[2]
 
             bow = make_bow(toks)
 
             # select top-20 words by tfidf
             tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
-            topN = sorted(tfidf.items(), key=lambda t:t[1])[-N:]
+            tfidf_in = {k:v for k,v in tfidf.items() if k in W}
+            topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-N:]
 
             #'''
             # unigram features
@@ -366,7 +375,7 @@ def extract_text_features(notes, hours, N, df):
     return dict(features)
 
 
-def filter_task(Y, task, per_task_criteria=None):
+def filter_task(Y, treatments, task, per_task_criteria=None):
 
     # If it's a diagnosis, then only include diagnoses that occur >= 10 times
     if task == 'diagnosis':
@@ -406,16 +415,18 @@ def filter_task(Y, task, per_task_criteria=None):
                 mu = np.mean(scores)
                 std = np.std(scores)
                 thresholds = []
-                thresholds.append(mu-1.0*std)
-                thresholds.append(mu+1.0*std)
+                #thresholds.append(mu-1.0*std)
+                #thresholds.append(mu+1.0*std)
+                thresholds.append(50)
+                thresholds.append(80)
                 thresholds.append(float('inf'))
             elif task == 'los':
-                '''
+                #'''
                 scores = [ (y if y<90 else 90) for y in scores ]
 
-                mu = np.mean(scores)
-                std = np.std(scores)
-                '''
+                #mu = np.mean(scores)
+                #std = np.std(scores)
+                #'''
                 thresholds = []
                 thresholds.append(1.5)
                 thresholds.append(3.5)
@@ -461,6 +472,23 @@ def filter_task(Y, task, per_task_criteria=None):
             thresholds = per_task_criteria
 
         ids = Y.keys()
+
+    elif task in ['vent', 'vaso', 'crys', 'col', 'dialysis']:
+        if per_task_criteria is None:
+            counts = defaultdict(int)
+            for y in treatments[task].values():
+                counts[y] += 1
+
+            # only include diagnois that are frequent enough
+            genders = {gender:i for i,gender in enumerate(counts.keys())}
+
+            # save the "good" diagnoses (to extract same set from dev)
+            per_task_criteria = genders
+        else:
+            genders = per_task_criteria
+
+        # which patients have that diagnosis?
+        ids = [pid for pid,y in treatments[task].items() if (y in genders)]
 
     elif task == 'gender':
         if per_task_criteria is None:
@@ -614,7 +642,9 @@ def filter_task(Y, task, per_task_criteria=None):
         if per_task_criteria is None:
             counts = defaultdict(int)
             for y in Y.values():
-                normed = y[task]
+                #normed = y[task]
+                normed = normalize_y(y[task], task)
+                if normed == '**ignore**': continue
                 counts[normed] += 1
 
             # only include diagnois that are frequent enough
@@ -660,6 +690,9 @@ def filter_task(Y, task, per_task_criteria=None):
         print counts
         '''
 
+    elif task in ['vaso','vent','crys','col','dialysis']:
+        Y = {pid:per_task_criteria[y] for pid,y in treatments[task].items()}
+
     else:
         filtered_Y = {pid:y[task] for pid,y in Y.items() 
                               if normalize_y(y[task],task) in per_task_criteria}
@@ -670,6 +703,26 @@ def filter_task(Y, task, per_task_criteria=None):
     return Y, per_task_criteria
 
 
+
+def load_word2vec(filename):
+    W = {}
+    with open(filename, 'r') as f:
+        for i,line in enumerate(f.readlines()):
+            if i==0: continue
+            '''
+            if sys.argv[1]=='small' and i>=50:
+                break
+            '''
+            toks = line.strip().split()
+            w = toks[0]
+            vec = np.array(map(float,toks[1:]))
+            W[w] = vec
+    return W
+
+
+
+W = load_word2vec('../../resources/word2vec/mimic10.vec')
+#W = defaultdict(lambda:np.zeros(300))
 
 
 
