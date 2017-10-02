@@ -99,16 +99,6 @@ def main():
 
 
 
-def load_ids(datatype):
-    path = '/home/sk6/data/%s' % datatype
-    ids = set()
-    for filename in os.listdir(path):
-        pid = filename.split('_')[0]
-        ids.add(pid)
-    return ids
-
-
-
 def save_data(path, X, Y):
     with open(path, 'wb') as f:
         pickle.dump(X, f)
@@ -186,8 +176,12 @@ def gather_data(mode='all'):
     # notes data
     text_data = defaultdict(list)
     for i,row in first_icu_notes.iterrows():
+        # only get first 24 notes
+        if len(text_data[row.subject_id]) >= 24: continue
+
         category = normalize_category(row.category)
         if category in categories:
+            # prediction gap
             time = row.charttime - row.intime
             #print row.subject_id, '\t', row.charttime, '\t', row.intime, '\t', time
             assert time>=datetime.timedelta(days=0)
@@ -196,7 +190,6 @@ def gather_data(mode='all'):
             data = (time,category,text)
             text_data[row.subject_id].append(data)
     text_data = dict(text_data)
-
 
     # static demographic info
     demographics_query = 'select icustay_id,gender,ethnicity,age from mimiciii.icustay_detail where subject_id>%d and subject_id<%d;' % (min_id,max_id)
@@ -287,9 +280,10 @@ def timestamp(tup):
 
 
 
-regex_punctuation = re.compile('[\',\.\-/\n]')
-regex_alphanum    = re.compile('[^a-zA-Z0-9 ]')
-regex_num         = re.compile('\d[\d ]+')
+regex_punctuation  = re.compile('[\',\.\-/\n]')
+regex_alphanum     = re.compile('[^a-zA-Z0-9_ ]')
+regex_num          = re.compile('\d[\d ]+')
+regex_sectionbreak = re.compile('____+')
 def tokenize(text):
     text = text.strip()
 
@@ -316,11 +310,13 @@ def tokenize(text):
             binned_age = ' %s ' % bin_age(match)
             text = text.replace(match, binned_age)
 
+    text = re.sub('_+', '_', text)
+
     text = text.lower()
-    text = re.sub(regex_punctuation, ' ', text)
-    text = re.sub(regex_alphanum   , '', text)
-    text = re.sub(regex_num        , ' 0 ', text)
-    return text.split()
+    text = re.sub(regex_punctuation , ' '  , text)
+    text = re.sub(regex_alphanum    , ''   , text)
+    text = re.sub(regex_num         , ' 0 ', text)
+    return text.strip().split()
 
 
 def bin_age(age):

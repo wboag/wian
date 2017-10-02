@@ -47,7 +47,7 @@ def main():
     tasks = dev_outcomes.values()[0].keys()
     #tasks = ['diagnosis']
     #tasks = ['gender']
-    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance'])
+    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance', 'discharge_location', 'admission_location'])
     for task in tasks:
         if task in excluded:
             continue
