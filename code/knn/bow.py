@@ -15,6 +15,13 @@ import datetime
 from sklearn.decomposition import PCA
 
 
+codedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+structured = os.path.join(codedir, 'structured')
+if structured not in sys.path:
+    sys.path.append(structured)
+
+from tools import get_data, build_df, extract_text_features, filter_task
+
 
 
 def main():
@@ -22,7 +29,7 @@ def main():
     mode = sys.argv[1]
 
     hours_s = sys.argv[2]
-    assert hours_s in ['12', '24', '240'], hours_s
+    assert hours_s in ['12', '24', '240', '2400'], hours_s
     hours = float(hours_s)
 
     N = int(sys.argv[3])
@@ -57,16 +64,6 @@ def main():
     '''
 
 
-def get_data(datatype, mode):
-    filename = '../../data/structured_%s_%s.pickle' % (mode,datatype)
-    with open(filename, 'rb') as f:
-        X = pickle.load(f)
-        outcomes = pickle.load(f)
-
-    assert sorted(X.keys()) == sorted(outcomes.keys())
-    return X, outcomes
-
-
 
 
 def extract_features_from_notes(notes, hours, N, df=None):
@@ -87,6 +84,7 @@ def extract_features_from_notes(notes, hours, N, df=None):
     return features_list, df
 
 
+
 def vectorize_X(ids, text_features, vectorizers=None):
     # learn vectorizer on training data
     if vectorizers is None:
@@ -100,145 +98,6 @@ def vectorize_X(ids, text_features, vectorizers=None):
     X = vect.transform(filtered_features)
 
     return X, vectorizers
-
-
-
-def make_bow(toks):
-    bow = defaultdict(int)
-    for w in toks:
-        bow[w] += 1
-    return bow
-
-
-
-def tokenize(text):
-    text = text.lower()
-    text = re.sub('[\',\.\-/\n]', ' ', text)
-    text = re.sub('[^a-zA-Z0-9 ]', '', text)
-    text = re.sub('\d[\d ]+', ' 0 ', text)
-    return text.split()
-
-
-
-def normalize_y(label, task):
-    if task == 'ethnicity':
-        if 'BLACK' in label: return 'BLACK'
-        if 'ASIAN' in label: return 'ASIAN'
-        if 'WHITE' in label: return 'WHITE'
-        if 'LATINO' in label: return 'HISPANIC'
-        if 'HISPANIC' in label: return 'HISPANIC'
-        if 'SOUTH AMERICAN' in label: return 'HISPANIC'
-        if 'PACIFIC' in label: return 'ASIAN'
-        if 'PORTUGUESE' in label: return 'WHITE'
-        if 'CARIBBEAN' in label: return 'HISPANIC'
-        if 'AMERICAN INDIAN' in label: return '**ignore**'
-        if 'ALASKA NATIVE' in label: return '**ignore**'
-        if 'MIDDLE EASTERN' in label: return '**ignore**'
-        if 'MULTI RACE' in label: return '**ignore**'
-        if 'UNKNOWN' in label: return '**ignore**'
-        if 'UNABLE TO OBTAIN' in label: return '**ignore**'
-        if 'PATIENT DECLINED TO ANSWER' in label: return '**ignore**'
-        if 'OTHER' in label: return '**ignore**'
-    elif task == 'language':
-        if label == 'ENGL': return 'ENGL'
-        if label == 'SPAN': return 'SPAN'
-        if label == 'RUSS': return 'RUSS'
-        if label == 'PTUN': return 'PTUN'
-        if label == 'CANT': return 'CANT'
-        if label == 'PORT': return 'PORT'
-        return '**ignore**'
-    elif task == 'marital_status':
-        if label == 'MARRIED': return 'MARRIED'
-        if label == 'SINGLE': return 'SINGLE'
-        if label == 'WIDOWED': return 'WIDOWED'
-        if label == 'DIVORCED': return 'DIVORCED'
-        return '**ignore**'
-    elif task == 'admission_location':
-        if label == 'EMERGENCY ROOM ADMIT': return 'EMERGENCY ROOM ADMIT'
-        if label == 'PHYS REFERRAL/NORMAL DELI': return 'PHYS REFERRAL/NORMAL DELI'
-        if label == 'TRANSFER FROM HOSP/EXTRAM': return 'TRANSFER FROM HOSP/EXTRAM'
-        if label == 'CLINIC REFERRAL/PREMATURE': return 'CLINIC REFERRAL/PREMATURE'
-        return '**ignore**'
-    elif task == 'discharge_location':
-        if 'HOME' in label: return 'HOME'
-        if label == 'SNF': return 'SNF'
-        if label == 'REHAB/DISTINCT PART HOSP': return 'REHAB/DISTINCT PART HOSP'
-        if label == 'DEAD/EXPIRED': return 'DEAD/EXPIRED'
-        return '**ignore**'
-    return label
-
-
-
-def build_df(notes, hours):
-    df = {}
-    for pid,records in notes.items():
-        pid_bow = {}
-        for note in records:
-            dt = note[0]
-            #print dt
-            if isinstance(dt, pd._libs.tslib.NaTType): continue
-            if note[0] < datetime.timedelta(days=hours/24.0):
-                # access the note's info
-                section = note[1]
-                toks = tokenize(note[2])
-
-                bow = make_bow(toks)
-                for w in bow.keys():
-                    pid_bow[w] = 1
-        for w in pid_bow.keys():
-            df[w] = 1
-    return df
-
-
-
-def extract_text_features(notes, hours, N, df):
-    features = defaultdict(int)
-    features['b'] = 1.0
-
-    for note in notes:
-        dt = note[0]
-        #print dt
-        if isinstance(dt, pd._libs.tslib.NaTType): continue
-        if note[0] < datetime.timedelta(days=hours/24.0):
-            # access the note's info
-            section = note[1]
-            toks = tokenize(note[2])
-
-            bow = make_bow(toks)
-
-            # select top-20 words by tfidf
-            tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
-            topN = sorted(tfidf.items(), key=lambda t:t[1])[:N]
-
-            #'''
-            # unigram features
-            #for w,tf in bow.items():
-            for w,tf in topN:
-                featname = w
-                """
-                if section:
-                    featname = (w, section) # ('unigram', w, section)
-                else:
-                    featname = w # ('unigram', w)
-                """
-                #features[featname] += tf
-                #features[featname] += 1
-                features[featname] = 1
-            #'''
-
-            '''
-            # ngram features
-            for n in [1,2]:
-                for i in range(len(toks)-n+1):
-                    ngram = tuple(toks[i:i+n])
-                    if section:
-                        featname = ('%d-gram'%n, ngram, section)
-                    else:
-                        featname = ('%d-gram'%n, ngram)
-                    features[featname] = 1.0
-            '''
-
-    return dict(features)
 
 
 

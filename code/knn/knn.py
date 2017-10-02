@@ -29,7 +29,7 @@ def main():
     outcomes = model['outcomes']
 
     try:
-        query_id = int(sys.argv[3])
+        query_id = int(sys.argv[4])
         ind = ids.index(query_id)
     except Exception, e:
         print 'bad query. please select from ids'
