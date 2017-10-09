@@ -17,7 +17,8 @@ import datetime
 #from FableLite import W
 
 from tools import compute_stats_multiclass, compute_stats_binary
-from tools import get_data, build_df, tokenize, make_bow, filter_task
+from tools import get_data, build_df, make_bow, filter_task, load_word2vec
+from tools import get_treatments
 
 
 
@@ -32,12 +33,48 @@ def main():
     N = int(sys.argv[3])
 
     train_notes, train_outcomes = get_data('train', mode)
-    dev_notes  ,   dev_outcomes = get_data('dev'  , mode)
+    print 'loaded train notes'
+    dev_notes  ,   dev_outcomes = get_data('dev' , mode)
+    print 'loaded dev notes'
+
+    train_ids = train_notes.keys()
+    dev_ids   =   dev_notes.keys()
+
+    T = get_treatments(mode)
+
+    def select(d, ids):
+        return {pid:val for pid,val in d.items() if pid in ids}
+    train_treatments = {ttype:select(treats,train_ids) for ttype,treats in T.items()}
+    dev_treatments   = {ttype:select(treats,  dev_ids) for ttype,treats in T.items()}
+
 
     # vectorize notes
     train_text_features, df  = extract_features_from_notes(train_notes, hours, N,df=None)
+    print 'extracted train features'
     dev_text_features  , df_ = extract_features_from_notes(  dev_notes, hours, N,df=df)
+    print 'extracted dev features'
     assert df == df_
+
+    '''
+    with open('embeddings_features.pickle', 'wb') as f:
+        pickle.dump(train_text_features, f)
+    exit()
+    '''
+
+    # throw out any data points that do not have any notes
+    good_train_ids = [pid for pid,feats in train_text_features.items() if feats]
+    good_dev_ids   = [pid for pid,feats in   dev_text_features.items() if feats]
+
+    def filter_ids(items, ids):
+        return {k:v for k,v in items.items() if k in ids}
+
+    train_text_features = filter_ids(train_text_features, good_train_ids)
+    train_outcomes      = filter_ids(train_outcomes     , good_train_ids)
+    train_treatments = {task:filter_ids(its,good_train_ids) for task,its in train_treatments.items()}
+
+    dev_text_features   = filter_ids(  dev_text_features,  good_dev_ids)
+    dev_outcomes      = filter_ids(dev_outcomes     , good_dev_ids)
+    dev_treatments = {task:filter_ids(its,good_dev_ids) for task,its in dev_treatments.items()}
 
     # Fit model for each prediction task
     models = {}
@@ -46,7 +83,8 @@ def main():
     #tasks = ['hosp_expire_flag']
     #tasks = ['diagnosis']
     #tasks = ['gender']
-    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance'])
+    tasks = ['ethnicity']
+    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance', 'discharge_location', 'admission_location'])
 
     for task in tasks:
         if task in excluded:
@@ -56,13 +94,14 @@ def main():
         #task = 'diagnosis'
 
         # extract appropriate data
-        train_Y, criteria = filter_task(train_outcomes, task, per_task_criteria=None)
+        train_Y, criteria = filter_task(train_outcomes, train_treatments,
+                                        task, per_task_criteria=None)
         train_ids = sorted(train_Y.keys())
         print 'task:', task
         print 'N:   ', len(train_Y)
 
         # vecotrize notes
-        X, vectorizers = vectorize_X(train_ids, train_text_features, vectorizers=None)
+        X,vectorizers = vectorize_X(train_ids, train_text_features, vectorizers=None)
 
         Y = vectorize_Y(train_ids, train_Y, criteria)
 
@@ -78,14 +117,17 @@ def main():
         vect = vectorizers[0]
 
         # train data
-        train_labels,_ = filter_task(train_outcomes, task, per_task_criteria=criteria)
+        train_labels,_ = filter_task(train_outcomes, train_treatments,
+                                     task, per_task_criteria=criteria)
         train_ids = sorted(train_labels.keys())
         train_X,_ = vectorize_X(train_ids, train_text_features, vectorizers=vectorizers)
         train_Y = vectorize_Y(train_ids, train_labels, criteria)
 
         # dev data
-        dev_labels,_ = filter_task(dev_outcomes, task, per_task_criteria=criteria)
+        dev_labels,_ = filter_task(dev_outcomes, dev_treatments,
+                                   task, per_task_criteria=criteria)
         dev_ids = sorted(dev_labels.keys())
+        #assert sorted(dev_ids) == sorted(dev_text_features)
         dev_X,_ = vectorize_X(dev_ids, dev_text_features, vectorizers=vectorizers)
         dev_Y = vectorize_Y(dev_ids, dev_labels, criteria)
 
@@ -113,12 +155,6 @@ def main():
 def extract_features_from_notes(notes, hours, N, df=None):
     features_list = {}
 
-    # dummy record (prevent SVM from collparsing to single-dimension pred)
-    emb_size = W['and'].shape[0]
-
-    # dummy record (prevent SVM from collparsing to single-dimension pred)
-    features_list[-1] = [(0,np.zeros(3*emb_size))]
-
     # no-op
     if df is None:
         df = build_df(notes, hours)
@@ -127,6 +163,10 @@ def extract_features_from_notes(notes, hours, N, df=None):
     for pid,records in sorted(notes.items()):
         features = extract_text_features(records, hours, N, df)
         features_list[pid] = features
+
+    # dummy record (prevent SVM from collparsing to single-dimension pred)
+    dimensions = features_list.values()[0][0][1].shape[0]
+    features_list[-1] = [(datetime.timedelta(days=0),np.zeros(dimensions))]
 
     return features_list, df
 
@@ -151,13 +191,19 @@ def vectorize_X(ids, text_features, vectorizers=None):
     emb_size = W['and'].shape[0]
     num_docs = vectorizers[0]
 
+    #assert sorted(ids) == sorted(text_features.keys())
+    dimensions = text_features.values()[0][0][1].shape[0]
     doc_embeddings = defaultdict(list)
     for i,pid in enumerate(ids):
+        assert len(text_features[pid])>0, pid
         for j,(dt,centroid) in enumerate(text_features[pid][:num_docs]):
             doc_embeddings[pid].append(centroid)
+    doc_embeddings = dict(doc_embeddings)
+    #assert sorted(ids) == sorted(doc_embeddings.keys())
 
     # agrregate document centroids
-    X = np.zeros((len(ids),9*emb_size))
+    dimensions = text_features.values()[0][0][1].shape[0]
+    X = np.zeros((len(ids),3*dimensions))
     for i,pid in enumerate(ids):
         vecs = doc_embeddings[pid]
 
@@ -291,27 +337,24 @@ def softmax(scores):
 
 def extract_text_features(notes, hours, N, df):
     features = []
-    for note in notes:
+    for note in notes[:24]:
         dt = note[0]
         #print dt
         if isinstance(dt, pd._libs.tslib.NaTType): continue
         if note[0] < datetime.timedelta(days=hours/24.0):
-            if note[2].strip() == '': 
-                continue
-
             # access the note's info
             section = note[1]
-            toks = tokenize(note[2])
+            toks = note[2]
 
             bow = make_bow(toks)
-
-            if len(bow) < 10:
-                continue
 
             # select top-20 words by tfidf
             tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
             tfidf_in = {k:v for k,v in tfidf.items() if k in W}
             topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-N:]
+
+            if len(topN) < 1:
+                continue
 
             vecs = [ W[w] for w,v in topN if w in W ]
             tmp = np.array(vecs)
@@ -322,23 +365,8 @@ def extract_text_features(notes, hours, N, df):
             doc_vec = np.concatenate([min_vec,max_vec,avg_vec])
 
             features.append( (dt,doc_vec) )
+    #assert len(features) > 0
     return features
-
-
-
-def load_word2vec(filename):
-    W = {}
-    with open(filename, 'r') as f:
-        for i,line in enumerate(f.readlines()):
-            '''
-            if sys.argv[1]=='small' and i>=50:
-                break
-            '''
-            toks = line.strip().split()
-            w = toks[0]
-            vec = np.array(map(float,toks[1:]))
-            W[w] = vec
-    return W
 
 
 

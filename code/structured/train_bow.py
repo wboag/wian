@@ -16,6 +16,7 @@ import datetime
 
 from tools import compute_stats_binary, compute_stats_multiclass
 from tools import get_data, build_df, extract_text_features, filter_task
+from tools import get_treatments
 
 
 
@@ -30,7 +31,17 @@ def main():
     N = int(sys.argv[3])
 
     train_notes, train_outcomes = get_data('train', mode)
-    dev_notes  ,   dev_outcomes = get_data('dev'  , mode)
+    dev_notes  ,   dev_outcomes = get_data('dev' , mode)
+
+    train_ids = train_notes.keys()
+    dev_ids   =   dev_notes.keys()
+
+    T = get_treatments(mode)
+
+    def select(d, ids):
+        return {pid:val for pid,val in d.items() if pid in ids}
+    train_treatments = {ttype:select(treats,train_ids) for ttype,treats in T.items()}
+    dev_treatments   = {ttype:select(treats,  dev_ids) for ttype,treats in T.items()}
 
     # vectorize notes
     train_text_features, df  = extract_features_from_notes(train_notes, hours, N,df=None)
@@ -39,15 +50,16 @@ def main():
 
     # Fit model for each prediction task
     models = {}
-    tasks = dev_outcomes.values()[0].keys()
+    tasks = dev_outcomes.values()[0].keys() 
+    #tasks = train_treatments.keys()
     #tasks = ['age','los','sapsii']
     #tasks = ['sapsii']
     #tasks = ['hosp_expire_flag']
-    #tasks = ['diagnosis']
-    #tasks = ['ethnicity']
+    #tasks = ['diagnosis','los','age']
+    tasks = ['ethnicity']
     #tasks = ['gender']
     #tasks = ['gender', 'diagnosis']
-    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance'])
+    excluded = set(['subject_id', 'first_wardid', 'last_wardid', 'first_careunit', 'last_careunit', 'language', 'marital_status', 'insurance', 'discharge_location', 'admission_location'])
     for task in tasks:
         if task in excluded:
             continue
@@ -56,13 +68,16 @@ def main():
         #task = 'diagnosis'
 
         # extract appropriate data
-        train_Y, criteria = filter_task(train_outcomes, task, per_task_criteria=None)
+        train_Y, criteria = filter_task(train_outcomes, train_treatments,
+                                        task, per_task_criteria=None)
         train_ids = sorted(train_Y.keys())
         print 'task:', task
         print 'N:   ', len(train_Y)
 
         # vecotrize notes
         X, vectorizers = vectorize_X(train_ids, train_text_features, vectorizers=None)
+
+        print X.shape
 
         # extract labels into list
         Y = np.array([train_Y[pid] for pid in train_ids])
@@ -80,20 +95,22 @@ def main():
         vect = vectorizers[0]
 
         # train data
-        train_labels,_ = filter_task(train_outcomes, task, per_task_criteria=criteria)
+        train_labels,_ = filter_task(train_outcomes, train_treatments, 
+                                     task, per_task_criteria=criteria)
         train_ids = sorted(train_labels.keys())
         train_X,_ = vectorize_X(train_ids, train_text_features, vectorizers=vectorizers)
         train_Y = np.array([train_labels[pid] for pid in train_ids])
 
         # dev data
-        dev_labels,_ = filter_task(dev_outcomes, task, per_task_criteria=criteria)
+        dev_labels,_ = filter_task(dev_outcomes, dev_treatments,
+                                   task, per_task_criteria=criteria)
         dev_ids = sorted(dev_labels.keys())
         dev_X,_ = vectorize_X(dev_ids, dev_text_features, vectorizers=vectorizers)
         dev_Y = np.array([dev_labels[pid] for pid in dev_ids])
 
         with io.StringIO() as out_f:
             # analysis
-            #analyze(task, vect, clf, criteria, out_f)
+            analyze(task, vect, clf, criteria, out_f)
 
             # eval on dev data
             results(model,train_ids,train_X,train_Y,hours,'TRAIN',task,criteria,out_f)
@@ -166,7 +183,7 @@ def analyze(task, vect, clf, labels_map, out_f):
     out_f = sys.stdout
     out_f.write(unicode(clf.coef_.shape))
     out_f.write(unicode('\n\n'))
-    num_feats = 10
+    num_feats = 15
     informative_feats = np.argsort(clf.coef_)
 
     for i,label in enumerate(labels):
@@ -273,37 +290,40 @@ def error_analysis(model, ids, notes, text_features, X, Y, hours, label, task):
             success = ''
         else:
             success = '_'
-        filename = os.path.join(methoddir, '%s%s.pred' % (success,pid))
-        with open(filename, 'w') as f:
-            print >>f, ''
-            print >>f, '=' * 80
-            print >>f, ''
-            print >>f, pid
-            print >>f, 'scores:', conf[1]
-            print >>f, 'pred:  ', V[conf[2]]
-            print >>f, 'ref:   ', V[conf[3]]
-            print >>f, '#'*20
-            for feat,v in sorted(text_features[pid].items(), key=lambda t:importance(t[0],conf[3])):
-            #for feat,v in sorted(text_features[pid].items(), key=lambda t:t[1]):
-                imp = importance(feat, conf[2])
-                #imp = v
-                #print >>f, feat, 
-                print >>f, '%.3f %s' % (imp,feat)
-            print >>f, '#'*20
-            print >>f, 'SCORES'
-            pind = conf[2]
-            rind = conf[3]
-            print >>f, 'predicted:', sum([val*importance(feat,pind) for feat,val in text_features[pid].items() if float('-inf')<importance(feat,pind)<float('inf')])
-            print >>f, 'true:     ', sum([val*importance(feat,rind) for feat,val in text_features[pid].items() if float('-inf')<importance(feat,rind)<float('inf')])
-            print >>f, '#'*20
-            for dt,category,text in sorted(notes[pid]):
-                print >>f, dt
-                print >>f, category
-                print >>f, text
-                print >>f, '-'*50
-            print >>f, ''
-            print >>f, '+'*80
-            print >>f, ''
+        if success == '_':
+            filename = os.path.join(methoddir, '%s.pred' % (pid))
+            with open(filename, 'w') as f:
+                print >>f, ''
+                print >>f, '=' * 80
+                print >>f, ''
+                print >>f, pid
+                print >>f, 'scores:', conf[1]
+                print >>f, 'pred:  ', V[conf[2]]
+                print >>f, 'ref:   ', V[conf[3]]
+                print >>f, '#'*20
+                for feat,v in sorted(text_features[pid].items(), key=lambda t:importance(t[0],conf[3])):
+                #for feat,v in sorted(text_features[pid].items(), key=lambda t:t[1]):
+                    imp = importance(feat, conf[2])
+                    #imp = v
+                    #print >>f, feat, 
+                    print >>f, '%.3f %s' % (imp,feat)
+                print >>f, '#'*20
+                print >>f, 'SCORES'
+                pind = conf[2]
+                rind = conf[3]
+                print >>f, 'predicted:', sum([val*importance(feat,pind) for feat,val in text_features[pid].items() if float('-inf')<importance(feat,pind)<float('inf')])
+                print >>f, 'true:     ', sum([val*importance(feat,rind) for feat,val in text_features[pid].items() if float('-inf')<importance(feat,rind)<float('inf')])
+                print >>f, '#'*20
+                '''
+                for dt,category,text in sorted(notes[pid]):
+                    print >>f, dt
+                    print >>f, category
+                    print >>f, text
+                    print >>f, '-'*50
+                '''
+                print >>f, ''
+                print >>f, '+'*80
+                print >>f, ''
 
 
 
