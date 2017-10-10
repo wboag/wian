@@ -20,7 +20,7 @@ Doc2Vec = gensim.models.doc2vec.Doc2Vec
 import logging
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
-from tools import compute_stats_multiclass, get_data, compute_stats_binary, filter_task
+from tools import compute_stats_multiclass, get_data, compute_stats_binary, filter_task, filter_notes_tfidf, build_df
 
 
 
@@ -29,7 +29,7 @@ def main():
     mode = sys.argv[1]
 
     hours_s = sys.argv[2]
-    N = sys.argv[3]
+    N = int(sys.argv[3])
 
     if len(sys.argv)>4 and (sys.argv[4]=='False' or sys.argv[4]=='True'):
 	retrain = (sys.argv[4] == 'True')
@@ -41,11 +41,13 @@ def main():
 
     train_notes, train_outcomes = get_data('train', mode)
     dev_notes  ,   dev_outcomes = get_data('dev'  , mode)
+    
+    df = build_df(train_notes, hours)
 
     print 'Preprocessing notes'
     # put notes in form needed for testing/training doc2vec model
-    train_tagged_docs = preprocess_notes(train_notes, hours)
-    dev_tagged_docs   = preprocess_notes(  dev_notes, hours)
+    train_tagged_docs = preprocess_notes(train_notes, hours, N, df)
+    dev_tagged_docs   = preprocess_notes(  dev_notes, hours, N, df)
 
     doc2vec_name = '../../models/structured/doc2vec/doc2vec_%s.p' % mode
     features_name = '../../models/structured/doc2vec/doc2vec_%s.features' % (mode)
@@ -150,7 +152,7 @@ def main():
         
 
 
-def preprocess_notes(notes, hours, tokens_only=False):
+def preprocess_notes(notes, hours, N, df):
     preprocessed_notes = {}
     
     # dummy record (prevent SVM from collparsing to single-dimension pred)
@@ -158,12 +160,12 @@ def preprocess_notes(notes, hours, tokens_only=False):
     
     # get concatted notes
     for pid,records in notes.items():
-        concat_note = extract_concat_note(records, hours)
-        if tokens_only:
-            preprocessed_notes[pid] = concat_note
-        else:
-            TaggedDocument = gensim.models.doc2vec.TaggedDocument
-            preprocessed_notes[pid] = TaggedDocument(concat_note, [pid])
+        filtered_notes = filter_notes_tfidf(records, hours, N, df)
+        concat_note = []
+        for note in filtered_notes:
+            concat_note += note
+        TaggedDocument = gensim.models.doc2vec.TaggedDocument
+        preprocessed_notes[pid] = TaggedDocument(concat_note, [pid])
 
     return preprocessed_notes
 
@@ -328,7 +330,7 @@ def doc2vec_features_fit(X):
         docs += patient
     '''
     docs = X
-    model = Doc2Vec(size=150, min_count=2, iter=100, workers=8)
+    model = Doc2Vec(size=150, min_count=2, iter=100, workers=8, dm=0, dbow_words=1)
     print 'building model vocab'
     model.build_vocab(docs)
     print 'training model'

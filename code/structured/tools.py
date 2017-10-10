@@ -374,8 +374,34 @@ def extract_text_features(notes, hours, N, df):
 
     return dict(features)
 
+def filter_notes_tfidf(notes, hours, N, df):
+    filtered_notes = []
 
-def filter_task(Y, treatments, task, per_task_criteria=None):
+    for note in notes[:24]:
+        dt = note[0]
+        #print dt
+        if isinstance(dt, pd._libs.tslib.NaTType): continue
+        if note[0] < datetime.timedelta(days=hours/24.0):
+            # access the note's info
+            section = note[1]
+            toks = note[2]
+
+            bow = make_bow(toks)
+
+            # select top-20 words by tfidf
+            tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
+            tfidf_in = {k:v for k,v in tfidf.items()}
+            topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-N:]
+            topN = [item[0] for item in topN]
+
+            filtered_note = [w for w in toks if w in topN]
+            filtered_notes.append(filtered_note)
+
+    return filtered_notes
+
+
+
+def filter_task(Y, task, per_task_criteria=None):
 
     # If it's a diagnosis, then only include diagnoses that occur >= 10 times
     if task == 'diagnosis':
@@ -472,23 +498,6 @@ def filter_task(Y, treatments, task, per_task_criteria=None):
             thresholds = per_task_criteria
 
         ids = Y.keys()
-
-    elif task in ['vent', 'vaso', 'crys', 'col', 'dialysis']:
-        if per_task_criteria is None:
-            counts = defaultdict(int)
-            for y in treatments[task].values():
-                counts[y] += 1
-
-            # only include diagnois that are frequent enough
-            genders = {gender:i for i,gender in enumerate(counts.keys())}
-
-            # save the "good" diagnoses (to extract same set from dev)
-            per_task_criteria = genders
-        else:
-            genders = per_task_criteria
-
-        # which patients have that diagnosis?
-        ids = [pid for pid,y in treatments[task].items() if (y in genders)]
 
     elif task == 'gender':
         if per_task_criteria is None:
@@ -690,8 +699,6 @@ def filter_task(Y, treatments, task, per_task_criteria=None):
         print counts
         '''
 
-    elif task in ['vaso','vent','crys','col','dialysis']:
-        Y = {pid:per_task_criteria[y] for pid,y in treatments[task].items()}
 
     else:
         filtered_Y = {pid:y[task] for pid,y in Y.items() 
