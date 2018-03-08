@@ -16,3 +16,12 @@ Setup
     $ pip install -r requirements.txt
 
 
+Experiments
+
+    $ python code/build_corpus.py all
+
+    $ python code/train_bow.py all
+
+    $ python code/train_embeddings.py all
+
+    $ python code/train_lstm.py all

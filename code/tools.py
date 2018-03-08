@@ -13,7 +13,8 @@ from collections import defaultdict
 
 
 def get_data(datatype, mode):
-    filename = '../data/pickled/%s_%s.pickle' % (mode,datatype)
+    homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    filename = '%s/data/pickled/%s_%s.pickle' % (homedir,mode,datatype)
     with open(filename, 'rb') as f:
         X = pickle.load(f)
         outcomes = pickle.load(f)
@@ -555,7 +556,8 @@ def load_word2vec(filename):
 
 
 
-W = load_word2vec('../resources/mimic10.vec')
+homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+W = load_word2vec('%s/resources/mimic10.vec' % homedir)
 #W = defaultdict(lambda:np.zeros(300))
 
 

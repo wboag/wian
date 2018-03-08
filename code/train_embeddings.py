@@ -93,7 +93,8 @@ def main():
         error_analysis(model, test_ids, test_notes, test_text_features, test_X, test_Y, 'TEST', task)
 
         # serialize trained model
-        modelname = '../models/embeddings_%s_%s.model' % (size,task)
+        homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        modelname = '%s/models/embeddings_%s_%s.model' % (homedir,size,task)
         M = {'criteria':criteria, 'num_docs':num_docs, 'clf':clf, 'output':output}
         with open(modelname, 'wb') as f:
             pickle.dump(M, f)

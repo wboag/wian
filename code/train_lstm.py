@@ -78,7 +78,7 @@ def main():
 	# fit model
 
         # fit model
-        filepath="weights-%d.best.hdf5" % random.randint(0,10000)
+        filepath="/tmp/weights-%d.best.hdf5" % random.randint(0,10000)
         save_best = SaveBestCallback(filepath)
         lstm_model.fit(train_X, train_Y, epochs=100, verbose=1, batch_size=32, 
                        validation_data=(test_X,test_Y),
@@ -105,7 +105,8 @@ def main():
         error_analysis(model, test_ids, test_notes, test_text_features, test_X, test_Y, 'TEST', task)
 
         # serialize trained model
-        modelname = '../models/rnn_%s_%s.model' % (size,task)
+        homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        modelname = '%s/models/rnn_%s_%s.model' % (homedir,size,task)
         M = {'criteria':criteria, 'num_docs':num_docs, 'model':lstm_pickle(lstm_model), 'output':output}
         with open(modelname, 'wb') as f:
             pickle.dump(M, f)
@@ -135,7 +136,7 @@ def macroaverage_f1(ref, pred):
 
 def lstm_pickle(lstm):
     # needs to return something pickle-able (so get binary serialized string)
-    tmp_file = 'tmp_keras_weights-%d' % random.randint(0,10000)
+    tmp_file = '/tmp/tmp_keras_weights-%d' % random.randint(0,10000)
     lstm.save_weights(tmp_file)
     with open(tmp_file, 'rb') as f:
         lstm_str = f.read()
