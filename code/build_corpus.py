@@ -1,54 +1,59 @@
 
 import os, sys
-import psycopg2
-import pandas as pd
 import cPickle as pickle
 from collections import defaultdict
 import datetime
 import re
 import random
 
+import psycopg2
+import pandas as pd
+import numpy as np
+
+from tools import mkdir_p
+
 
 # organization: data/$pid.txt (order: demographics, outcome, notes)
-homedir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-datadir = os.path.join(homedir, 'data', 'readable')
+homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+pickled_dir  = os.path.join(homedir, 'data', 'pickled')
+readable_dir = os.path.join(homedir, 'data', 'readable')
+
+# store the pickled and readable notes
+mkdir_p(pickled_dir)
+mkdir_p(readable_dir)
 
 
 
 def main():
 
     try:
-        mode = sys.argv[1]
-        if mode not in ['all','small']:
+        size = sys.argv[1]
+        if size not in ['all','small']:
             raise Exception('bad')
     except Exception, e:
         print '\n\tusage: python %s <all|small>\n' % sys.argv[0]
         exit(1)
 
-    X, Y = gather_data(mode)
+    X, Y = gather_data(size)
     assert sorted(X.keys()) == sorted(Y.keys())
 
-    # Randomly shuffle ids to create train/dev/test
+    # Randomly shuffle ids to create train/test
     ids = X.keys()
     random.shuffle(ids)
 
-    # make train/dev/test
+    # make train/test
     train = set()
-    dev   = set()
     test  = set()
 
     for i,pid in enumerate(ids):
         n = i % 10
-        if 0 <= n <= 6:
+        if n < 7:
             train.add(pid)
-        elif 7 <= n <= 8:
-            dev.add(pid)
-        elif 9 <= n <= 9:
+        elif n < 9:
             test.add(pid)
 
     print 
     print 'train: %d' % len(train)
-    print 'dev:   %d' % len(dev)
     print 'test:  %d' % len(test)
     print 
 
@@ -66,36 +71,24 @@ def main():
         return {pid:x for pid,x in data.items() if pid in ids}
 
     train_X = filter_data(X, train)
-    dev_X   = filter_data(X, dev)
     test_X  = filter_data(X, test)
 
     train_Y = filter_data(Y, train)
-    dev_Y   = filter_data(Y, dev)
     test_Y  = filter_data(Y, test)
 
-    assert len(train_X) + len(dev_X) + len(test_X) == len(ids)
-
     # how many notes does each patient have
-    cutoff = 32
-    lost = 0
-    N = 0
-    affected = 0
-    for pid,records in X.items():
-        n = len(records)
-        N += n
-        if n > cutoff:
-            res = n - cutoff
-            lost += res
-            affected += 1
-    print '%d patients' % affected
-    print '%d notes (%f)' % (lost,lost/float(N))
+    notes_per_stay = np.array([len(records) for records in X.values()])
+    minn  = notes_per_stay.min()
+    maxn  = notes_per_stay.max()
+    meann = notes_per_stay.mean()
+    stdn  = notes_per_stay.std()
+    mediann = sorted(notes_per_stay)[len(notes_per_stay)/2]
+    print 'notes per day: min=%d max=%d median=%d mean=%.1f std=%.1f\n' % (minn,maxn,mediann,meann,stdn)
 
-    # you should only be manually examining the training data to build a model
-    #dump_readable(train_X, train_Y)
+    dump_readable(X, Y)
 
-    save_data('../../data/structured_%s_train.pickle'% mode, train_X, train_Y)
-    save_data('../../data/structured_%s_dev.pickle'  % mode,   dev_X,   dev_Y)
-    save_data('../../data/structured_%s_test.pickle' % mode,  test_X,  test_Y)
+    save_data('%s/%s_train.pickle'% (pickled_dir,size), train_X, train_Y)
+    save_data('%s/%s_test.pickle' % (pickled_dir,size),  test_X,  test_Y)
 
 
 
@@ -106,18 +99,18 @@ def save_data(path, X, Y):
         
 
 
-def gather_data(mode='all'):
+def gather_data(size='all'):
     records = {}
     targets = {}
 
-    if mode == 'small':
+    if size == 'small':
         min_id = 500
         max_id = 1000
-    elif mode == 'all':
+    elif size == 'all':
         min_id = 0
         max_id = 1e20
     else:
-        raise Exception('bad mode "%s"' % mode)
+        raise Exception('bad size "%s"' % size)
 
     # connect to the mimic database
     con = psycopg2.connect(dbname='mimic')
@@ -176,19 +169,22 @@ def gather_data(mode='all'):
     # notes data
     text_data = defaultdict(list)
     for i,row in first_icu_notes.iterrows():
-        # only get first 24 notes
-        if len(text_data[row.subject_id]) >= 24: continue
-
+        # only looking at the common categories
         category = normalize_category(row.category)
-        if category in categories:
-            # prediction gap
-            time = row.charttime - row.intime
-            #print row.subject_id, '\t', row.charttime, '\t', row.intime, '\t', time
-            assert time>=datetime.timedelta(days=0)
-            text = tokenize(row.text)
-            #text = row.text
-            data = (time,category,text)
-            text_data[row.subject_id].append(data)
+        if category not in categories:
+            continue
+
+        # only get first 24 notes
+        if len(text_data[row.subject_id]) >= 24:
+            continue
+
+        # timestamp of arrival
+        time = row.charttime - row.intime
+        assert time>=datetime.timedelta(days=0)
+        text = tokenize(row.text)
+        #text = row.text
+        data = (time,category,text)
+        text_data[row.subject_id].append(data)
     text_data = dict(text_data)
 
     # static demographic info
@@ -345,7 +341,7 @@ def bin_age(age):
 
 def dump_readable(X, Y):
     for pid in X:
-        filename = os.path.join(datadir, '%s.txt' % pid)
+        filename = os.path.join(readable_dir, '%s.txt' % pid)
         with open(filename, 'w') as f:
             if Y[pid]['hosp_expire_flag']:
                 print >>f, 'died in hospital'
@@ -372,6 +368,7 @@ def dump_readable(X, Y):
             if len(timestamps):
                 last = sorted(timestamps)[-1]
             else:
+                print X[pid]
                 last = X[pid][0][0]
             print >>f, 'last note:', last
             print >>f, ''

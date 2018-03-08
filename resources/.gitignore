@@ -1,3 +1,1 @@
-*
-!.gitignore
-!get_resources.sh
+*.vec

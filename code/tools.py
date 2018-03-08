@@ -11,19 +11,9 @@ import cPickle as pickle
 from collections import defaultdict
 
 
-'''
-code_dir = dirname(dirname(os.path.abspath(__file__)))
-umlscode_dir = os.path.join(code_dir, 'umls')
-if umlscode_dir not in sys.path:
-    sys.path.append(umlscode_dir)
-import umls_lookup
-'''
-
-
-
 
 def get_data(datatype, mode):
-    filename = '../../data/structured_%s_%s.pickle' % (mode,datatype)
+    filename = '../data/pickled/%s_%s.pickle' % (mode,datatype)
     with open(filename, 'rb') as f:
         X = pickle.load(f)
         outcomes = pickle.load(f)
@@ -33,184 +23,19 @@ def get_data(datatype, mode):
 
 
 
-def get_treatments(mode):
-    filename = '../../data/%s_treatments.pickle' % (mode)
-    with open(filename, 'rb') as f:
-        T = pickle.load(f)
-    return T
+def extract_features_from_notes(notes, topN_tfidf_words, extracter, df=None):
+    features_list = {}
 
+    # document frequency for top-N tfidf words
+    if df is None:
+        df = build_df(notes)
 
+    # compute features
+    for pid,records in notes.items():
+        features = extract_text_features(records, topN_tfidf_words, df, extracter)
+        features_list[pid] = features
 
-def compute_stats_binary(task, pred, P, ref, labels, out_f):
-    # santiy check
-    assert all(map(int,P>0) == pred)
-
-    V = [0,1]
-    n = len(V)
-    assert n==2, 'sorry, must be exactly two labels (how else would we do AUC?)'
-    conf = np.zeros((n,n), dtype='int32')
-    for p,r in zip(pred,ref):
-        conf[p][r] += 1
-
-    out_f.write(unicode(conf))
-    out_f.write(unicode('\n'))
-
-    tp = conf[1,1]
-    tn = conf[0,0]
-    fp = conf[1,0]
-    fn = conf[0,1]
-
-    precision   = tp / (tp + fp + 1e-9)
-    recall      = tp / (tp + fn + 1e-9)
-    sensitivity = tp / (tp + fn + 1e-9)
-    specificity = tn / (tn + fp + 1e-9)
-
-    f1 = (2*precision*recall) / (precision+recall+1e-9)
-
-    tpr =  true_positive_rate(pred, ref)
-    fpr = false_positive_rate(pred, ref)
-
-    accuracy = (tp+tn) / (tp+tn+fp+fn + 1e-9)
-
-    '''
-    print conf
-    print 'p: ', precision
-    print 'r: ', recall
-    print 'sn:', sensitivity
-    print 'sp: ', specificity
-    print 'tpr:   ', true_positive_rate(pred, ref)
-    print '1-fpr: ', 1 - false_positive_rate(pred, ref)
-    exit()
-    '''
-
-    out_f.write(unicode('\tspecificity %.3f\n' % specificity))
-    out_f.write(unicode('\tsensitivty: %.3f\n' % sensitivity))
-
-    success = 0.
-    pos_examples = [p for p,y in zip(P, ref) if y==1]
-    neg_examples = [p for p,y in zip(P, ref) if y==0]
-    trials  = len(pos_examples) * len(neg_examples) + 1e-9
-    for pos in pos_examples:
-        for neg in neg_examples:
-            if pos > neg:
-                success += 1
-    empirical_auc = success / trials
-    out_f.write(unicode('\t\temp auc:    %.3f\n' % empirical_auc))
-
-    '''
-    # AUC
-    tprs,fprs = [], []
-    smidge = min(P)*.01
-    for threshold in np.linspace(min(P)-smidge,max(P)+smidge,1001):
-        vals = np.array(map(int,P>threshold))
-        tpr_ =  true_positive_rate(vals, ref)
-        fpr_ = false_positive_rate(vals, ref)
-
-        tprs.append(tpr_)
-        fprs.append(fpr_)
-
-    auc = 0.0
-    for i in range(len(tprs)-1):
-        assert fprs[i] >= fprs[i+1]
-        avg_y = .5 * (tprs[i] + tprs[i+1])
-        dx = fprs[i] - fprs[i+1]
-        #auc += dx * dy
-        auc += avg_y * dx
-    out_f.write(unicode('\t\tauc:        %.3f\n' % auc))
-    '''
-
-    out_f.write(unicode('\taccuracy:   %.3f\n' % accuracy   ))
-    out_f.write(unicode('\tprecision:  %.3f\n' % precision  ))
-    out_f.write(unicode('\trecall:     %.3f\n' % recall     ))
-    out_f.write(unicode('\tf1:         %.3f\n' % f1         ))
-    out_f.write(unicode('\tTPR:        %.3f\n' % tpr        ))
-    out_f.write(unicode('\tFPR:        %.3f\n' % fpr        ))
-
-    '''
-    print fprs
-    print tprs
-    '''
-
-
-
-def compute_stats_multiclass(task, pred, P, ref, labels_map, out_f):
-    # santiy check
-    assert all(map(int,P.argmax(axis=1)) == pred)
-
-    # get rid of that final prediction dimension
-    #pred = pred[1:]
-    #ref  =  ref[1:]
-
-    V = set(range(P.shape[1]))
-    n = max(V)+1
-    conf = np.zeros((n,n), dtype='int32')
-    for p,r in zip(pred,ref):
-        conf[p][r] += 1
-
-
-    if task in ['sapsii', 'age', 'los']:
-        labels = []
-        labels_ = [0] + labels_map
-        for i in range(len(labels_)-1):
-            label = '[%s,%s)' % (labels_[i],labels_[i+1])
-            labels.append(label)
-    else:
-        labels = [label for label,i in sorted(labels_map.items(), key=lambda t:t[1])]
-
-
-    out_f.write(unicode(conf))
-    out_f.write(unicode('\n'))
-
-    precisions = []
-    recalls = []
-    f1s = []
-    out_f.write(unicode('\t prec  rec    f1   label\n'))
-    for i in range(n):
-        label = labels[i]
-
-        tp = conf[i,i]
-        pred_pos = conf[i,:].sum()
-        ref_pos  = conf[:,i].sum()
-
-        precision   = tp / (pred_pos + 1e-9)
-        recall      = tp / (ref_pos + 1e-9)
-        f1 = (2*precision*recall) / (precision+recall+1e-9)
-
-        out_f.write(unicode('\t%.3f %.3f %.3f %s\n' % (precision,recall,f1,label)))
-
-        # Save info
-        precisions.append(precision)
-        recalls.append(recall)
-        f1s.append(f1)
-
-    avg_precision = sum(precisions) / len(precisions)
-    avg_recall    = sum(recalls   ) / len(recalls   )
-    avg_f1        = sum(f1s       ) / len(f1s       )
-    out_f.write(unicode('\t--------------------------\n'))
-    out_f.write(unicode('\t%.3f %.3f %.3f avg\n' % (avg_precision,avg_recall,avg_f1)))
-
-
-
-def true_positive_rate(pred, ref):
-    tp,fn = 0,0
-    for p,r in zip(pred,ref):
-        if p==1 and r==1:
-            tp += 1
-        elif p==0 and r==1:
-            fn += 1
-    return tp / (tp + fn + 1e-9)
-
-
-def false_positive_rate(pred, ref):
-    fp,tn = 0,0
-    for p,r in zip(pred,ref):
-        if p==1 and r==0:
-            fp += 1
-        elif p==0 and r==0:
-            tn += 1
-    return fp / (fp + tn + 1e-9)
-
-
+    return features_list, df
 
 
 
@@ -219,22 +44,7 @@ def make_bow(toks):
     bow = defaultdict(int)
     for w in toks:
         bow[w] += 1
-    # only return words that have CUIs
-    cui_bow = bow
-    '''
-    ##cui_bow = defaultdict(int)
-    cui_bow = {}
-    for w,c in bow.items():
-        """
-        if umls_lookup.cui_lookup(w):
-            cui_bow[w] = 1
-        """
-        #"""
-        for cui in umls_lookup.cui_lookup(w):
-            cui_bow[cui] = 1
-        #"""
-    '''
-    return cui_bow
+    return bow
 
 
 
@@ -302,7 +112,7 @@ def normalize_y(label, task):
 
 
 
-def build_df(notes, hours):
+def build_df(notes):
     df = {}
     for pid,records in notes.items():
         pid_bow = {}
@@ -310,92 +120,100 @@ def build_df(notes, hours):
             dt = note[0]
             #print dt
             if isinstance(dt, pd._libs.tslib.NaTType): continue
-            if note[0] < datetime.timedelta(days=hours/24.0):
-                # access the note's info
-                section = note[1]
-                toks = note[2]
 
-                bow = make_bow(toks)
-                for w in bow.keys():
-                    pid_bow[w] = 1
+            # access the note's info
+            section = note[1]
+            toks = note[2]
+
+            # mark each word's presence in the document
+            bow = make_bow(toks)
+            for w in bow.keys():
+                pid_bow[w] = 1
+
+        # mark each word's presence in the stay
         for w in pid_bow.keys():
             df[w] = 1
     return df
 
 
 
-def extract_text_features(notes, hours, N, df):
-    features = defaultdict(int)
-    features['b'] = 1.0
+def extract_text_features(notes, topN_tfidf_words, df, extracter):
+    # are we returning a feature_dict or a list of vectors?
+    if extracter == 'bow':
+        features = {}
+    elif extracter == 'embeddings':
+        features = []
+    else:
+        raise Exception('unknown extracter: "%s"' % extracter)
 
-    for note in notes[:24]:
+    # for each note
+    for note in notes:
         dt = note[0]
-        #print dt
-        if isinstance(dt, pd._libs.tslib.NaTType): continue
-        if note[0] < datetime.timedelta(days=hours/24.0):
-            # access the note's info
-            section = note[1]
-            toks = note[2]
+        assert not isinstance(dt, pd._libs.tslib.NaTType)
 
-            bow = make_bow(toks)
+        # access the note's info
+        section = note[1]
+        toks = note[2]
 
-            # select top-20 words by tfidf
-            tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
-            tfidf_in = {k:v for k,v in tfidf.items() if k in W}
-            topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-N:]
+	# extract unigrams from note
+        bow = make_bow(toks)
 
-            #'''
+        # select top-20 words by tfidf
+        tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
+        tfidf_in = {k:v for k,v in tfidf.items() if k in W}
+        topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-topN_tfidf_words:]
+
+        if extracter == 'bow':
             # unigram features
-            #for w,tf in bow.items():
             for w,tf in topN:
                 featname = w
-                """
-                if section:
-                    featname = (w, section) # ('unigram', w, section)
-                else:
-                    featname = w # ('unigram', w)
-                """
-                #features[featname] += tf
-                #features[featname] += 1
                 features[featname] = 1
-            #'''
+        elif extracter == 'embeddings':
+            # if there are no words in this note that are top-N tfidf, then it is a zero vector
+	    if len(topN) < 1:
+                emb_size = W.values()[0].shape[0]
+                vecs = [ np.zeros(emb_size) ]
+            else:
+                vecs = [ W[w] for w,v in topN if w in W ]
 
-            '''
-            # ngram features
-            for n in [1,2]:
-                for i in range(len(toks)-n+1):
-                    ngram = tuple(toks[i:i+n])
-                    if section:
-                        featname = ('%d-gram'%n, ngram, section)
-                    else:
-                        featname = ('%d-gram'%n, ngram)
-                    features[featname] = 1.0
-            '''
+	    # aggregate this note into min/max/average word vectors
+	    tmp = np.array(vecs)
+	    min_vec = tmp.min(axis=0)
+	    max_vec = tmp.max(axis=0)
+	    avg_vec = tmp.sum(axis=0) / float(len(vecs))
 
-    return dict(features)
+	    doc_vec = np.concatenate([min_vec,max_vec,avg_vec])
 
-def filter_notes_tfidf(notes, hours, N, df):
+	    features.append( (dt,doc_vec) )
+        else:
+            raise Exception('unknown extracter: "%s"' % extracter)
+
+    return features
+
+
+
+def filter_notes_tfidf(notes, N, df):
     filtered_notes = []
 
     for note in notes[:24]:
         dt = note[0]
         #print dt
         if isinstance(dt, pd._libs.tslib.NaTType): continue
-        if note[0] < datetime.timedelta(days=hours/24.0):
-            # access the note's info
-            section = note[1]
-            toks = note[2]
 
-            bow = make_bow(toks)
+        # access the note's info
+        section = note[1]
+        toks = note[2]
 
-            # select top-20 words by tfidf
-            tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
-            tfidf_in = {k:v for k,v in tfidf.items()}
-            topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-N:]
-            topN = [item[0] for item in topN]
+        bow = make_bow(toks)
 
-            filtered_note = [w for w in toks if w in topN]
-            filtered_notes.append(filtered_note)
+        # select top-20 words by tfidf
+        tfidf = { w:tf/(math.log(df[w])+1) for w,tf in bow.items() if (w in df)}
+        tfidf_in = {k:v for k,v in tfidf.items()}
+        topN = sorted(tfidf_in.items(), key=lambda t:t[1])[-N:]
+        topN = [item[0] for item in topN]
+
+        filtered_note = [w for w in toks if w in topN]
+        filtered_notes.append(filtered_note)
 
     return filtered_notes
 
@@ -706,9 +524,18 @@ def filter_task(Y, task, per_task_criteria=None):
         filtered_normed_Y = {pid:normalize_y(y, task) for pid,y in filtered_Y.items() 
                               if normalize_y(y,task)!='**ignore**'}
         Y = {pid:per_task_criteria[y] for pid,y in filtered_normed_Y.items()}
-    Y[-1] = len(per_task_criteria)
     return Y, per_task_criteria
 
+
+
+
+def mkdir_p(path):
+    prefix = os.path.split(path)[0]
+    if not os.path.exists(prefix):
+        mkdir_p(prefix)
+    if not os.path.exists(path):
+        print 'making:', path
+        os.mkdir(path)
 
 
 def load_word2vec(filename):
@@ -728,7 +555,7 @@ def load_word2vec(filename):
 
 
 
-W = load_word2vec('../../resources/word2vec/mimic10.vec')
+W = load_word2vec('../resources/mimic10.vec')
 #W = defaultdict(lambda:np.zeros(300))
 
 
