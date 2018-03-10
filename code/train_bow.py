@@ -41,6 +41,13 @@ def main():
     test_text_features , df_ = extract_features_from_notes( test_notes, topN_tfidf_words, 'bow', df=df)
     assert df == df_
 
+    '''
+    for pid,notes in train_notes.items():
+        train_text_features[pid]['<num_notes>'] = len(notes)
+    for pid,notes in test_notes.items():
+        test_text_features[pid]['<num_notes>'] = len(notes)
+    '''
+
     # Make a model for each task
     tasks = ['ethnicity', 'age', 'admission_type', 'hosp_expire_flag', 'gender', 'los', 'diagnosis']
     for task in tasks:
@@ -231,8 +238,9 @@ def error_analysis(model, ids, notes, text_features, X, Y, label, task):
             success = ''
         else:
             success = '_'
-        if success == '_':
-            filename = os.path.join(methoddir, '%s.pred' % (pid))
+        #if success == '_':
+        if True:
+            filename = os.path.join(methoddir, '%s%s.pred' % (success,pid))
             with open(filename, 'w') as f:
                 print >>f, ''
                 print >>f, '=' * 80
@@ -255,13 +263,13 @@ def error_analysis(model, ids, notes, text_features, X, Y, label, task):
                 print >>f, 'predicted:', sum([val*importance(feat,pind) for feat,val in text_features[pid].items() if float('-inf')<importance(feat,pind)<float('inf')])
                 print >>f, 'true:     ', sum([val*importance(feat,rind) for feat,val in text_features[pid].items() if float('-inf')<importance(feat,rind)<float('inf')])
                 print >>f, '#'*20
-                '''
+                #'''
                 for dt,category,text in sorted(notes[pid]):
                     print >>f, dt
                     print >>f, category
                     print >>f, text
                     print >>f, '-'*50
-                '''
+                #'''
                 print >>f, ''
                 print >>f, '+'*80
                 print >>f, ''
