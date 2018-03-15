@@ -34,6 +34,7 @@ def main():
     topN_tfidf_words = 20
 
     train_notes, train_outcomes = get_data('train', size)
+    dev_notes  ,   dev_outcomes = get_data('dev'  , size)
     test_notes ,  test_outcomes = get_data('test' , size)
 
     # max number of documents (this is used during vectorization)
@@ -41,6 +42,7 @@ def main():
 
     # extract feature lists
     train_text_features, df  = extract_features_from_notes(train_notes, topN_tfidf_words, 'embeddings', df=None)
+    dev_text_features , df_ = extract_features_from_notes( dev_notes, topN_tfidf_words, 'embeddings', df=df)
     test_text_features , df_ = extract_features_from_notes( test_notes, topN_tfidf_words, 'embeddings', df=df)
     assert df == df_
 
@@ -70,6 +72,11 @@ def main():
         lstm_model.summary()
 
         # test data
+        dev_labels,_ = filter_task(dev_outcomes, task, per_task_criteria=criteria)
+        dev_ids = sorted(dev_labels.keys())
+        dev_X = vectorize_X(dev_ids, dev_text_features, num_docs=num_docs)
+        dev_Y = vectorize_Y(dev_ids, dev_labels, criteria)
+
         test_labels,_ = filter_task(test_outcomes, task, per_task_criteria=criteria)
         test_ids = sorted(test_labels.keys())
         test_X = vectorize_X(test_ids, test_text_features, num_docs=num_docs)
@@ -81,7 +88,7 @@ def main():
         filepath="/tmp/weights-%d.best.hdf5" % random.randint(0,10000)
         save_best = SaveBestCallback(filepath)
         lstm_model.fit(train_X, train_Y, epochs=100, verbose=1, batch_size=32, 
-                       validation_data=(test_X,test_Y),
+                       validation_data=(dev_X,dev_Y),
                        callbacks=[save_best])
         lstm_model.load_weights(filepath)
         os.remove(filepath)
@@ -96,6 +103,7 @@ def main():
 
             # eval on test data
             results_onehot_keras(model, train_ids, train_X, train_Y, 'TRAIN', task, out_f)
+            results_onehot_keras(model,   dev_ids,   dev_X,   dev_Y,  'DEV' , task, out_f)
             results_onehot_keras(model,  test_ids,  test_X,  test_Y, 'TEST' , task, out_f)
 
             output = out_f.getvalue()

@@ -43,6 +43,7 @@ def main():
 
     # make train/test
     train = set()
+    dev = set()
     test  = set()
 
     for i,pid in enumerate(ids):
@@ -51,9 +52,12 @@ def main():
             train.add(pid)
         elif n < 9:
             test.add(pid)
+        else:
+            dev.add(pid)
 
     print 
     print 'train: %d' % len(train)
+    print 'dev:   %d' % len(dev)
     print 'test:  %d' % len(test)
     print 
 
@@ -71,9 +75,11 @@ def main():
         return {pid:x for pid,x in data.items() if pid in ids}
 
     train_X = filter_data(X, train)
+    dev_X   = filter_data(X, dev)
     test_X  = filter_data(X, test)
 
     train_Y = filter_data(Y, train)
+    dev_Y   = filter_data(Y, dev)
     test_Y  = filter_data(Y, test)
 
     # how many notes does each patient have
@@ -88,6 +94,7 @@ def main():
     dump_readable(X, Y)
 
     save_data('%s/%s_train.pickle'% (pickled_dir,size), train_X, train_Y)
+    save_data('%s/%s_dev.pickle'  % (pickled_dir,size),   dev_X,   dev_Y)
     save_data('%s/%s_test.pickle' % (pickled_dir,size),  test_X,  test_Y)
 
 
