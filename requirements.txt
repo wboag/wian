@@ -4,5 +4,5 @@ pandas
 scikit-learn
 scipy
 keras
-tensorflow==1.4
+tensorflow==1.15.2
 h5py
